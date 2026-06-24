@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""mitmproxy-mock - CLI to operate tap_pb_mock addon's control API.
+
+Design: pure stdlib (urllib), runs on system python3 (no venv needed).
+AI agents call this CLI; `agent-doc` subcommand emits self-describing usage
+so any agent framework (opencode/Claude Code/custom) can load instructions.
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+HOST = os.environ.get("MITMPROXY_MOCK_HOST", "127.0.0.1")
+PORT = os.environ.get("MITMPROXY_MOCK_PORT", "9090")
+BASE = f"http://{HOST}:{PORT}"
+
+
+def _req(method, path, body=None):
+    url = BASE + path
+    data = json.dumps(body).encode() if body is not None else None
+    r = urllib.request.Request(url, data=data, method=method)
+    if data is not None:
+        r.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            raw = resp.read().decode()
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode()
+        try:
+            return json.loads(raw)
+        except Exception:
+            return {"error": f"HTTP {e.code}: {raw}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _parse_value(s):
+    """Parse a CLI value: try JSON first (int/bool/null/object/array), else string."""
+    try:
+        return json.loads(s)
+    except Exception:
+        return s
+
+
+def _print(obj):
+    if obj is None:
+        return
+    if isinstance(obj, (dict, list)):
+        print(json.dumps(obj, ensure_ascii=False, indent=2))
+    else:
+        print(obj)
+
+
+def cmd_flows(args):
+    data = _req("GET", "/flows")
+    if isinstance(data, list):
+        for f in data:
+            line = f"{f.get('id','')[:8]}  {f.get('method',''):6} {f.get('status','')}  [{f.get('protocol','?')}]  {f.get('url','')}"
+            if f.get("error"):
+                line += f"  ERR:{f['error']}"
+            print(line)
+        print(f"-- {len(data)} flows --")
+    else:
+        _print(data)
+
+
+def cmd_decode(args):
+    data = _req("GET", f"/flows/{args.id}")
+    _print(data)
+
+
+def cmd_mock(args):
+    value = _parse_value(args.value)
+    res = _req("POST", f"/flows/{args.id}/mock", {"path": args.path, "value": value})
+    _print(res)
+
+
+def cmd_rules_add(args):
+    value = _parse_value(args.value)
+    body = {"url_pattern": args.url_pattern, "path": args.path, "value": value}
+    if args.protocol:
+        body["protocol"] = args.protocol
+    _print(_req("POST", "/rules", body))
+
+
+def cmd_rules_list(args):
+    _print(_req("GET", "/rules"))
+
+
+def cmd_rules_del(args):
+    _print(_req("DELETE", f"/rules/{args.index}"))
+
+
+def cmd_replay(args):
+    _print(_req("POST", f"/flows/{args.id}/replay", {}))
+
+
+def cmd_resume(args):
+    _print(_req("POST", f"/flows/{args.id}/resume", {}))
+
+
+def cmd_intercept(args):
+    if not args.enable:
+        _print(_req("POST", "/intercept", {"enable": False}))
+        return
+    body = {"enable": True}
+    if args.filter:
+        body["filter"] = args.filter
+    _print(_req("POST", "/intercept", body))
+
+
+def cmd_health(args):
+    _print(_req("GET", "/health"))
+
+
+AGENT_DOC = """# mitmproxy-mock — Agent Guide
+
+You operate a mitmproxy capture session via the `mitmproxy-mock` CLI. A mitmproxy
+addon has **already auto-detected the protocol** (protobuf or JSON) of every
+captured HTTP response and decoded it into a plain **dict/list** (JSON-like).
+
+## Core abstraction (important)
+- Protobuf (Charles self-describing rule: `Content-Type: application/x-protobuf;
+  desc="<url>"; messageType="<FQN>"; delimited=true`) is decoded to dict via
+  `json_format.MessageToDict` (proto field names preserved).
+- JSON is decoded via `json.loads`.
+- **You never touch protobuf wire format.** You only read/modify dict fields by
+  `path` (dot + `[index]`), exactly like editing JSON. PB and JSON are identical
+  at the operation layer.
+- delimited protobuf lists decode to a JSON array of dicts.
+
+## Commands
+```
+mitmproxy-mock flows                              # list captured flows + protocol tag
+mitmproxy-mock decode <id>                        # full decoded dict (+protocol/messageType)
+mitmproxy-mock mock <id> <path> <value>           # patch ONE flow's response field (single-shot)
+mitmproxy-mock rules add <url_regex> <path> <value> [--protocol pb|json]  # continuous rule
+mitmproxy-mock rules list
+mitmproxy-mock rules del <index>
+mitmproxy-mock intercept on [--filter <mitmproxy filter>]   # pause flows to edit before delivery
+mitmproxy-mock intercept off
+mitmproxy-mock resume <id>                        # release an intercepted flow to client
+mitmproxy-mock replay <id>                        # replay a (possibly modified) flow
+mitmproxy-mock health                             # check addon control API
+mitmproxy-mock agent-doc                          # print this guide
+```
+- `<id>` is the flow id prefix shown by `flows` (first 8 chars accepted).
+- `<path>` uses dot + index: `game.name`, `items[0].id`, `a.b[2].c`.
+- `<value>` is parsed as JSON if possible (int/bool/null/object/array), else string.
+  Quote strings in shell: `"hello"`; for objects: '{"k":"v"}'.
+
+## Two mock modes
+1. **Continuous rule** (`rules add`): every response whose URL matches
+   `<url_regex>` gets the field patched on the fly — client receives modified
+   data. Use this to build a stable mocked test environment.
+2. **Single-shot** (`mock <id>`): patch one already-captured flow's response in
+   store. To actually deliver the change to the client, either:
+   - `intercept on` BEFORE the request → flow pauses → `mock` → `resume <id>`,
+     or
+   - `mock` then `replay <id>` to re-issue.
+
+## Typical workflow
+1. `mitmproxy-mock flows` — find the target flow, note id + protocol.
+2. `mitmproxy-mock decode <id>` — inspect the decoded dict, identify the field path.
+3. Either `rules add '~q /api/game' game.name "测试"` (continuous),
+   or `intercept on` → trigger request → `mock <id> game.name "测试"` → `resume <id>`.
+4. Verify on device / `replay <id>`.
+
+## Notes
+- If `decode` returns `error`: the response wasn't recognized as PB/JSON, or PB
+  schema (desc URL) couldn't be loaded / messageType not found. Check the
+  Content-Type header has valid `desc`/`messageType` params.
+- Continuous rules apply at capture time; `decode` shows the (possibly mocked)
+- decoded data.
+- Control API default: http://127.0.0.1:9090 (override via
+  MITMPROXY_MOCK_HOST / MITMPROXY_MOCK_PORT env).
+"""
+
+
+def cmd_agent_doc(args):
+    print(AGENT_DOC)
+
+
+def main():
+    cmds = [
+        "flows", "decode", "mock", "rules", "replay", "resume",
+        "intercept", "health", "agent-doc",
+    ]
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+        print(AGENT_DOC)
+        print("\n## Quick reference")
+        for c in cmds:
+            print(f"  mitmproxy-mock {c} ...")
+        sys.exit(0)
+
+    cmd = sys.argv[1]
+    args = sys.argv[2:]
+
+    if cmd == "flows":
+        cmd_flows(args)
+    elif cmd == "decode" and args:
+        cmd_decode(type("A", (), {"id": args[0]})())
+    elif cmd == "mock" and len(args) >= 3:
+        cmd_mock(type("A", (), {"id": args[0], "path": args[1], "value": args[2]})())
+    elif cmd == "rules":
+        if not args:
+            cmd_rules_list(None)
+        elif args[0] == "add" and len(args) >= 4:
+            proto = None
+            rest = args[3:]
+            if rest and rest[0] == "--protocol" and len(rest) >= 2:
+                proto = rest[1]
+            cmd_rules_add(type("A", (), {
+                "url_pattern": args[1], "path": args[2], "value": args[3],
+                "protocol": proto,
+            })())
+        elif args[0] == "list":
+            cmd_rules_list(None)
+        elif args[0] == "del" and len(args) >= 2:
+            cmd_rules_del(type("A", (), {"index": args[1]})())
+        else:
+            print("usage: mitmproxy-mock rules add <url_regex> <path> <value> [--protocol pb|json]")
+            print("       mitmproxy-mock rules list")
+            print("       mitmproxy-mock rules del <index>")
+            sys.exit(2)
+    elif cmd == "replay" and args:
+        cmd_replay(type("A", (), {"id": args[0]})())
+    elif cmd == "resume" and args:
+        cmd_resume(type("A", (), {"id": args[0]})())
+    elif cmd == "intercept":
+        if not args or args[0] not in ("on", "off"):
+            print("usage: mitmproxy-mock intercept on [--filter <expr>]")
+            print("       mitmproxy-mock intercept off")
+            sys.exit(2)
+        enable = args[0] == "on"
+        flt = None
+        if enable and len(args) >= 3 and args[1] == "--filter":
+            flt = args[2]
+        cmd_intercept(type("A", (), {"enable": enable, "filter": flt})())
+    elif cmd == "health":
+        cmd_health(None)
+    elif cmd == "agent-doc":
+        cmd_agent_doc(None)
+    else:
+        print(f"unknown command: {cmd}\nrun `mitmproxy-mock help`")
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

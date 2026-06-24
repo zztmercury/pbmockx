@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+rules.local.yaml
+*.log
+/tmp/

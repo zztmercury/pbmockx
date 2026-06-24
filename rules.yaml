@@ -1,0 +1,20 @@
+# Persistent mock rules — auto-loaded on addon start.
+# Add rules here (git-tracked, shared) OR via `mitmproxy-mock rules add` (runtime).
+#
+# Fields:
+#   url_pattern: regex matched against request URL (re.search)
+#   path:        field path in decoded dict, e.g. game.name, items[0].id
+#   value:       new value (any JSON type: string/int/bool/null/object/array)
+#   protocol:    optional 'protobuf' | 'json' (rule skipped if set and mismatches)
+#
+# Examples (uncomment to enable):
+#
+# - url_pattern: 'api/game'
+#   path: 'game.name'
+#   value: 'MockedGame'
+#   protocol: json
+#
+# - url_pattern: 'api/person'
+#   path: 'name'
+#   value: 'MockedName'
+#   protocol: protobuf
