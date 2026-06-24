@@ -6,6 +6,7 @@
 
 协议识别后 PB 与 JSON 都抽象成 dict，AI agent 只操作 path+value，不碰 protobuf wire format。
 """
+import importlib
 import json
 import os
 import re
@@ -22,6 +23,14 @@ from mitmproxy.contentviews import Contentview
 # ---------------- protocol detection (Charles rules) ----------------
 
 PB_CT_RE = re.compile(r"application/x-(google-)?protobuf", re.I)
+
+# Google well-known types whose .proto files are NOT in TapTap's .desc but are
+# referenced as dependencies (e.g. apis.Response depends on google/protobuf/any.proto).
+_WELL_KNOWN = [
+    "any_pb2", "descriptor_pb2", "timestamp_pb2", "duration_pb2",
+    "wrappers_pb2", "empty_pb2", "struct_pb2", "field_mask_pb2",
+    "api_pb2", "source_context_pb2", "type_pb2",
+]
 DESC_RE = re.compile(r'desc\s*=\s*"([^"]+)"', re.I)
 DESC_RE_BARE = re.compile(r"desc\s*=\s*([^\s;]+)", re.I)
 MSGTYPE_RE = re.compile(r'messageType\s*=\s*"([^"]+)"', re.I)
@@ -150,11 +159,36 @@ class PBEngine:
         fds = descriptor_pb2.FileDescriptorSet()
         fds.ParseFromString(data)
         pool = descriptor_pool.DescriptorPool()
-        for fd in fds.file:
+        # collect files: google well-known types (deps absent from the .desc) + the .desc's own files
+        files = []
+        for name in _WELL_KNOWN:
             try:
-                pool.Add(fd)
+                mod = importlib.import_module("google.protobuf." + name)
+            except ImportError:
+                continue
+            fd = getattr(mod, "DESCRIPTOR", None)
+            if fd is None:
+                continue
+            try:
+                fp = descriptor_pb2.FileDescriptorProto()
+                fp.ParseFromString(fd.serialized_pb)
+                files.append(fp)
             except Exception:
-                pass  # duplicate definitions across files are skipped
+                pass
+        files.extend(fds.file)
+        # topological Add: retry until no progress (resolves inter-file deps)
+        remaining = files
+        progress = True
+        while remaining and progress:
+            progress = False
+            still = []
+            for fd in remaining:
+                try:
+                    pool.Add(fd)
+                    progress = True
+                except Exception:
+                    still.append(fd)
+            remaining = still
         with self._lock:
             self._pools[desc_url] = pool
         return pool
@@ -165,7 +199,8 @@ class PBEngine:
         return message_factory.GetMessageClass(desc)
 
     def decode(self, desc_url, message_type, delimited, data):
-        cls = self.get_class(desc_url, message_type)
+        pool = self._get_pool(desc_url)
+        cls = message_factory.GetMessageClass(pool.FindMessageTypeByName(message_type))
         if delimited:
             out = []
             pos = 0
@@ -173,41 +208,37 @@ class PBEngine:
                 length, pos = read_varint(data, pos)
                 msg = cls()
                 msg.ParseFromString(data[pos:pos + length])
-                out.append(self._to_dict(msg))
+                out.append(self._to_dict(msg, pool))
                 pos += length
             return out
         msg = cls()
         msg.ParseFromString(data)
-        return self._to_dict(msg)
+        return self._to_dict(msg, pool)
 
     def encode(self, desc_url, message_type, delimited, data):
-        cls = self.get_class(desc_url, message_type)
+        pool = self._get_pool(desc_url)
+        cls = message_factory.GetMessageClass(pool.FindMessageTypeByName(message_type))
         if delimited:
             out = bytearray()
             for item in data:
                 msg = cls()
-                json_format.ParseDict(item, msg, ignore_unknown_fields=True)
+                json_format.ParseDict(item, msg, ignore_unknown_fields=True, descriptor_pool=pool)
                 s = msg.SerializeToString()
                 out += encode_varint(len(s)) + s
             return bytes(out)
         msg = cls()
-        json_format.ParseDict(data, msg, ignore_unknown_fields=True)
+        json_format.ParseDict(data, msg, ignore_unknown_fields=True, descriptor_pool=pool)
         return msg.SerializeToString()
 
     @staticmethod
-    def _to_dict(msg):
-        try:
-            return json_format.MessageToDict(
-                msg,
-                preserving_proto_field_name=True,
-                always_print_fields_with_no_presence=True,
-            )
-        except TypeError:
-            return json_format.MessageToDict(
-                msg,
-                preserving_proto_field_name=True,
-                including_default_value_fields=True,
-            )
+    def _to_dict(msg, pool=None):
+        kwargs = {
+            "preserving_proto_field_name": True,
+            "always_print_fields_with_no_presence": True,
+        }
+        if pool is not None:
+            kwargs["descriptor_pool"] = pool
+        return json_format.MessageToDict(msg, **kwargs)
 
 
 # ---------------- path navigation (a.b[0].c) ----------------
@@ -415,8 +446,10 @@ class ControlHandler(BaseHTTPRequestHandler):
                 "id": m.group(1),
                 "url": f.request.url,
                 "protocol": rec["info"].get("protocol"),
+                "desc": rec["info"].get("desc"),
                 "messageType": rec["info"].get("messageType"),
                 "delimited": rec["info"].get("delimited"),
+                "content_type": f.response.headers.get("content-type", "") if f.response else "",
                 "data": rec["decoded"],
                 "error": rec.get("error"),
             })
