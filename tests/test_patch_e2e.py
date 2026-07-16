@@ -2,18 +2,22 @@
 """E2E test: PB patch rule — verify response.content (delivered PB bytes) is modified.
 Also verifies --original shows pre-patch data.
 
-Uses test_server's Person class to decode PB bytes (no flowmock_addon import).
+Uses test_server's Person class to decode PB bytes (no pbmockx_addon import).
 """
 import json
+import os
 import subprocess
 import sys
 import time
 import urllib.request
 
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROXY = "http://127.0.0.1:8080"
 CONTROL = "http://127.0.0.1:9090"
-VENV_PY = ".venv/bin/python"
-VENV_MITMDUMP = ".venv/bin/mitmdump"
+VENV_PY = os.path.join(PROJECT_DIR, ".venv", "bin", "python")
+VENV_MITMDUMP = os.path.join(PROJECT_DIR, ".venv", "bin", "mitmdump")
+TEST_SERVER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_server.py")
+ADDON = os.path.join(PROJECT_DIR, "addon", "pbmockx_addon.py")
 TEST_SERVER_PORT = 8889
 
 procs = []
@@ -91,7 +95,7 @@ def main():
 
     # 1. Start test server
     print("[1] Starting test server...")
-    p = subprocess.Popen([VENV_PY, "test_server.py"],
+    p = subprocess.Popen([VENV_PY, TEST_SERVER],
                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     procs.append(p)
     if not wait_for(f"http://127.0.0.1:{TEST_SERVER_PORT}/api/data", "test_server"):
@@ -100,10 +104,10 @@ def main():
     # 2. Start mitmdump + addon
     print("[2] Starting mitmdump + addon...")
     p = subprocess.Popen(
-        [VENV_MITMDUMP, "-s", "flowmock_addon.py",
+        [VENV_MITMDUMP, "-s", ADDON,
          "--mode", "regular@127.0.0.1:8080",
-         "--set", "flowmock_control_port=9090",
-         "--set", "flowmock_control_host=127.0.0.1",
+         "--set", "pbmockx_control_port=9090",
+         "--set", "pbmockx_control_host=127.0.0.1",
          "-q"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )

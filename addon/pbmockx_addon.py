@@ -407,7 +407,7 @@ class MockEngine:
 
     def save(self):
         rules_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "rules.yaml"
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules.yaml")
         )
         try:
             from ruamel.yaml import YAML
@@ -435,7 +435,7 @@ class MockEngine:
 
     def reload(self):
         rules_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "rules.yaml"
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules.yaml")
         )
         if not os.path.exists(rules_file):
             return 0
@@ -482,14 +482,14 @@ def find_flow(fid):
 
 # ---------------- contentview (mitmweb human preview) ----------------
 
-class PBJsonView(Contentview):
-    name = "flowmock"
-    syntax_highlight = "yaml"
+class PBJsonView(contentviews.InteractiveContentview):
+    name = "pbmockx"
+    syntax_highlight = "json"
 
     def render_priority(self, data, metadata):
         ct = (metadata.content_type or "").lower()
         if "protobuf" in ct or "json" in ct:
-            return 1.0
+            return 2.0
         return -1.0
 
     def prettify(self, data, metadata):
@@ -502,7 +502,23 @@ class PBJsonView(Contentview):
         try:
             return json.dumps(json.loads(data.decode("utf-8")), ensure_ascii=False, indent=2)
         except Exception:
-            return f"[tap-pb-json] {len(data)} bytes (no decoded data; check Content-Type desc/messageType)"
+            return f"[pbmockx] {len(data)} bytes (no decoded data; check Content-Type desc/messageType)"
+
+    def reencode(self, prettified, metadata):
+        """Re-encode edited JSON back to PB/JSON bytes."""
+        flow = metadata.flow
+        if flow is None:
+            raise ValueError("no flow context for reencode")
+        with store_lock:
+            rec = flow_store.get(flow.id)
+        if not rec:
+            raise ValueError("flow not in store; cannot determine protocol")
+        info = rec["info"]
+        data = json.loads(prettified)
+        if info.get("protocol") == "protobuf":
+            return ADDON.codec.encode(info, data)
+        else:
+            return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
 # ---------------- control HTTP API ----------------
@@ -713,19 +729,19 @@ class TapPbMock:
         global ADDON
         ADDON = self
         try:
-            ctx.options.add_option("flowmock_control_port", int, 9090, "control API port")
-            ctx.options.add_option("flowmock_control_host", str, "127.0.0.1", "control API host")
+            ctx.options.add_option("pbmockx_control_port", int, 9090, "control API port")
+            ctx.options.add_option("pbmockx_control_host", str, "127.0.0.1", "control API host")
         except Exception:
             pass
         contentviews.add(PBJsonView())
-        host = ctx.options.flowmock_control_host
-        port = ctx.options.flowmock_control_port
+        host = ctx.options.pbmockx_control_host
+        port = ctx.options.pbmockx_control_port
         n = self.mock.reload()
         if n:
             ctx.log.info(f"loaded {n} rules from rules.yaml")
         self.server = ThreadingHTTPServer((host, port), ControlHandler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        ctx.log.info(f"flowmock control API: http://{host}:{port}")
+        ctx.log.info(f"pbmockx control API: http://{host}:{port}")
 
     def request(self, flow):
         """map_remote rules: rewrite request URL before sending to server."""

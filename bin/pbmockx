@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""flowmock - CLI to operate the flowmock addon's control API + tool maintenance.
+"""pbmockx - CLI to operate the pbmockx addon's control API + tool maintenance.
 
 Design: pure stdlib (urllib/subprocess/os), runs on system python3 (no venv needed).
 `agent-doc` and `help` read SKILL.md (single source of truth) so any agent
@@ -13,8 +13,8 @@ import sys
 import urllib.error
 import urllib.request
 
-HOST = os.environ.get("FLOWMOCK_HOST", "127.0.0.1")
-PORT = os.environ.get("FLOWMOCK_PORT", "9090")
+HOST = os.environ.get("PBMOCKX_HOST", "127.0.0.1")
+PORT = os.environ.get("PBMOCKX_PORT", "9090")
 BASE = f"http://{HOST}:{PORT}"
 
 
@@ -57,11 +57,11 @@ def _print(obj):
 
 def _skill_doc():
     """Load the agent guide from SKILL.md (single source), strip frontmatter."""
-    skill = os.path.join(os.path.dirname(os.path.realpath(__file__)), "SKILL.md")
+    skill = os.path.join(_project_dir(), "docs", "SKILL.md")
     try:
         text = open(skill).read()
     except Exception as e:
-        return f"(could not read SKILL.md: {e})\nRun a subcommand, e.g. `mitmproxy-mock flows`."
+        return f"(could not read SKILL.md: {e})\nRun a subcommand, e.g. `pbmockx flows`."
     if text.startswith("---"):
         end = text.find("---", 3)
         if end != -1:
@@ -114,7 +114,7 @@ def cmd_decode(args):
         elif not fid:
             fid = a
     if not fid:
-        print("usage: flowmock decode <id> [--original]")
+        print("usage: pbmockx decode <id> [--original]")
         sys.exit(2)
     qs = "?original=1" if original else ""
     _print(_req("GET", f"/flows/{fid}{qs}"))
@@ -129,7 +129,7 @@ def cmd_mock(args):
 def cmd_abort(args):
     fid = args[0] if args else None
     if not fid:
-        print("usage: flowmock abort <id>")
+        print("usage: pbmockx abort <id>")
         sys.exit(2)
     _print(_req("POST", f"/flows/{fid}/abort", {}))
 
@@ -197,10 +197,10 @@ def cmd_map_local(args):
     elif sub == "del" and len(args) >= 2:
         _print(_req("DELETE", f"/rules/{args[1]}"))
     else:
-        print("usage: flowmock map-local add <url_regex> <file_path> [--status N] [--header K:V]")
-        print("       flowmock map-local add <url_regex> --data '<json>' [--desc <url>] [--messageType <name>] [--delimited]")
-        print("       flowmock map-local list")
-        print("       flowmock map-local del <id>")
+        print("usage: pbmockx map-local add <url_regex> <file_path> [--status N] [--header K:V]")
+        print("       pbmockx map-local add <url_regex> --data '<json>' [--desc <url>] [--messageType <name>] [--delimited]")
+        print("       pbmockx map-local list")
+        print("       pbmockx map-local del <id>")
         sys.exit(2)
 
 
@@ -222,9 +222,9 @@ def cmd_map_remote(args):
     elif sub == "del" and len(args) >= 2:
         _print(_req("DELETE", f"/rules/{args[1]}"))
     else:
-        print("usage: flowmock map-remote add <url_regex> <new_url> [--regex]")
-        print("       flowmock map-remote list")
-        print("       flowmock map-remote del <id>")
+        print("usage: pbmockx map-remote add <url_regex> <new_url> [--regex]")
+        print("       pbmockx map-remote list")
+        print("       pbmockx map-remote del <id>")
         sys.exit(2)
 
 
@@ -247,10 +247,10 @@ def cmd_breakpoint(args):
                 _req("DELETE", f"/rules/{r.get('id')}")
             print(f"Cleared {len(rules)} breakpoints.")
     else:
-        print("usage: flowmock breakpoint add <url_regex>")
-        print("       flowmock breakpoint list")
-        print("       flowmock breakpoint del <id>")
-        print("       flowmock breakpoint off")
+        print("usage: pbmockx breakpoint add <url_regex>")
+        print("       pbmockx breakpoint list")
+        print("       pbmockx breakpoint del <id>")
+        print("       pbmockx breakpoint off")
         sys.exit(2)
 
 
@@ -283,14 +283,14 @@ def cmd_agent_doc(args):
 # ---------------- tool maintenance commands ----------------
 
 def _project_dir():
-    """Find project directory by resolving the CLI script's realpath."""
-    return os.path.dirname(os.path.realpath(__file__))
+    """Find project root by resolving the CLI script's realpath, then going up one level."""
+    return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 
 # ---------------- version checking ----------------
 
-RELEASES_API = "https://api.github.com/repos/zztmercury/flowmock/releases/latest"
-VERSION_CACHE = os.path.expanduser("~/.flowmock/.version_cache")
+RELEASES_API = "https://api.github.com/repos/zztmercury/pbmockx/releases/latest"
+VERSION_CACHE = os.path.expanduser("~/.pbmockx/.version_cache")
 VERSION_TTL = 3600  # 1 hour
 
 
@@ -342,11 +342,11 @@ def _skill_target_dirs(agent=None):
     candidates = []
     agent_map = {
         "opencode": [
-            os.path.join(home, ".agents", "skills", "flowmock"),
-            os.path.join(home, ".config", "opencode", "skills", "flowmock"),
+            os.path.join(home, ".agents", "skills", "pbmockx"),
+            os.path.join(home, ".config", "opencode", "skills", "pbmockx"),
         ],
         "claude": [
-            os.path.join(home, ".claude", "skills", "flowmock"),
+            os.path.join(home, ".claude", "skills", "pbmockx"),
         ],
     }
     if agent and agent != "all":
@@ -415,7 +415,7 @@ def cmd_skill(args):
             for line in found:
                 print(f"  {line}")
         else:
-            print("No skill symlinks found. Run: flowmock skill install")
+            print("No skill symlinks found. Run: pbmockx skill install")
 
     elif sub == "uninstall":
         agents = []
@@ -449,7 +449,7 @@ def cmd_skill(args):
             print("No skill symlinks to remove.")
 
     else:
-        print("usage: flowmock skill [install|list|uninstall] [--agent <name>] [--dir <path>]")
+        print("usage: pbmockx skill [install|list|uninstall] [--agent <name>] [--dir <path>]")
         sys.exit(2)
 
 
@@ -463,7 +463,7 @@ def cmd_update(args):
             print(f"Update available: {remote['tag']} (current: {local})")
             if remote.get("url"):
                 print(f"Changelog: {remote['url']}")
-            print("Run: flowmock update")
+            print("Run: pbmockx update")
         elif remote:
             print(f"Up to date ({local}).")
         else:
@@ -496,14 +496,14 @@ def cmd_update(args):
 
 def cmd_version(args):
     local = _get_version()
-    print(f"flowmock {local}")
+    print(f"pbmockx {local}")
     if "--check" in args:
         remote = _check_remote_version()
         if remote and remote["tag"] != local:
             print(f"  Update available: {remote['tag']}")
             if remote.get("url"):
                 print(f"  Changelog: {remote['url']}")
-            print("  Run: flowmock update")
+            print("  Run: pbmockx update")
         elif remote:
             print("  Up to date.")
         else:
@@ -528,7 +528,7 @@ def cmd_doctor(args):
         issues.append("venv")
 
     # 3. CLI in PATH
-    cli_in_path = shutil.which("flowmock") is not None
+    cli_in_path = shutil.which("pbmockx") is not None
     if cli_in_path:
         print(f"  CLI:        OK (in PATH)")
     else:
@@ -545,7 +545,7 @@ def cmd_doctor(args):
             skill_ok = True
             break
     if not skill_ok:
-        print(f"  skill:      NOT installed — run: flowmock skill install")
+        print(f"  skill:      NOT installed — run: pbmockx skill install")
         issues.append("skill")
 
     # 5. addon running
@@ -556,7 +556,7 @@ def cmd_doctor(args):
         if flow_count == 0:
             print(f"  traffic:    NO traffic — operate app to trigger requests")
     else:
-        print(f"  addon:      NOT running — run: flowmock start")
+        print(f"  addon:      NOT running — run: pbmockx start")
         issues.append("addon")
 
     # 6. version
@@ -578,19 +578,65 @@ def cmd_doctor(args):
         print("  All checks passed.")
 
 
+def cmd_connect_android(args):
+    """Setup Android device proxy via adb reverse."""
+    device = None
+    i = 0
+    while i < len(args):
+        if args[i] == "-s" and i + 1 < len(args):
+            device = args[i + 1]; i += 2
+        elif args[i] == "--device" and i + 1 < len(args):
+            device = args[i + 1]; i += 2
+        else:
+            i += 1
+
+    if not shutil.which("adb"):
+        print("adb not found. Install Android Platform Tools.")
+        sys.exit(1)
+
+    proxy_port = os.environ.get("PROXY_PORT", "8080")
+
+    if not device:
+        r = subprocess.run(["adb", "devices"], capture_output=True, text=True)
+        lines = r.stdout.strip().split("\n")[1:]
+        for line in lines:
+            parts = line.split("\t")
+            if len(parts) == 2 and parts[1].strip() == "device":
+                device = parts[0].strip()
+                break
+
+    if not device:
+        print("No adb device online. Use -s <serial> to specify.")
+        sys.exit(1)
+
+    print(f"[*] device: {device}")
+    subprocess.run(["adb", "-s", device, "reverse", f"tcp:{proxy_port}", f"tcp:{proxy_port}"], check=True)
+    subprocess.run(["adb", "-s", device, "shell", "settings", "put", "global", "http_proxy", f"127.0.0.1:{proxy_port}"], check=True)
+    print(f"[*] device proxy -> 127.0.0.1:{proxy_port} (adb reverse)")
+
+
+def cmd_web(args):
+    """Open the mitmweb UI in browser."""
+    web_port = os.environ.get("WEB_PORT", "8081")
+    url = f"http://127.0.0.1:{web_port}"
+    import webbrowser
+    webbrowser.open(url)
+    print(f"Opening {url}")
+
+
 def cmd_start(args):
     project = _project_dir()
-    start_sh = os.path.join(project, "start.sh")
+    start_sh = os.path.join(project, "scripts", "start.sh")
     if not os.path.isfile(start_sh):
         print(f"start.sh not found at {start_sh}")
         sys.exit(1)
     # Already running?
     health = _req("GET", "/health")
     if isinstance(health, dict) and health.get("ok"):
-        print("flowmock already running.")
+        print("pbmockx already running.")
         return
     # Start in background, log to file
-    log_file = os.path.join(project, "flowmock.log")
+    log_file = os.path.join(project, "pbmockx.log")
     log = open(log_file, "w")
     proc = subprocess.Popen(
         [start_sh] + list(args),
@@ -598,7 +644,7 @@ def cmd_start(args):
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
-    print(f"Starting flowmock (PID {proc.pid})...")
+    print(f"Starting pbmockx (PID {proc.pid})...")
     print(f"  log: {log_file}")
     # Wait for control API to be ready (up to 15s)
     import time
@@ -613,7 +659,7 @@ def cmd_start(args):
             local = _get_version()
             remote = _check_remote_version()
             if remote and remote["tag"] != local:
-                print(f"  [i] Update available: {remote['tag']} (current: {local}). Run: flowmock update")
+                print(f"  [i] Update available: {remote['tag']} (current: {local}). Run: pbmockx update")
             return
     print("  [TIMEOUT] control API not ready in 15s. Check log:")
     print(f"  tail -20 {log_file}")
@@ -621,9 +667,9 @@ def cmd_start(args):
 
 
 def cmd_stop(args):
-    # Match flowmock_addon in command line (works for mitmdump/mitmweb
+    # Match pbmockx_addon in command line (works for mitmdump/mitmweb
     # which show as Python process on macOS)
-    r = subprocess.run(["pkill", "-f", "flowmock_addon"], capture_output=True)
+    r = subprocess.run(["pkill", "-f", "pbmockx_addon"], capture_output=True)
     if r.returncode == 0:
         print("Stopped.")
     else:
@@ -643,13 +689,13 @@ def main():
         "intercept", "health", "agent-doc",
         "map-local", "map-remote", "breakpoint", "abort",
         "skill", "update", "version", "doctor",
-        "start", "stop", "restart",
+        "start", "stop", "restart", "connect-android", "web",
     ]
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
         print(_skill_doc())
         print("\n## Quick reference")
         for c in cmds:
-            print(f"  flowmock {c} ...")
+            print(f"  pbmockx {c} ...")
         sys.exit(0)
 
     cmd = sys.argv[1]
@@ -682,11 +728,11 @@ def main():
         elif args[0] == "reload":
             cmd_rules_reload(args[1:])
         else:
-            print("usage: flowmock rules add <url_regex> <path> <value> [--protocol pb|json]")
-            print("       flowmock rules list")
-            print("       flowmock rules del <id>")
-            print("       flowmock rules save")
-            print("       flowmock rules reload")
+            print("usage: pbmockx rules add <url_regex> <path> <value> [--protocol pb|json]")
+            print("       pbmockx rules list")
+            print("       pbmockx rules del <id>")
+            print("       pbmockx rules save")
+            print("       pbmockx rules reload")
             sys.exit(2)
     elif cmd == "map-local":
         cmd_map_local(args)
@@ -702,8 +748,8 @@ def main():
         cmd_resume(type("A", (), {"id": args[0]})())
     elif cmd == "intercept":
         if not args or args[0] not in ("on", "off"):
-            print("usage: flowmock intercept on [--filter <expr>]")
-            print("       flowmock intercept off")
+            print("usage: pbmockx intercept on [--filter <expr>]")
+            print("       pbmockx intercept off")
             sys.exit(2)
         enable = args[0] == "on"
         flt = None
@@ -728,8 +774,12 @@ def main():
         cmd_stop(args)
     elif cmd == "restart":
         cmd_restart(args)
+    elif cmd == "connect-android":
+        cmd_connect_android(args)
+    elif cmd == "web":
+        cmd_web(args)
     else:
-        print(f"unknown command: {cmd}\nrun `flowmock help`")
+        print(f"unknown command: {cmd}\nrun `pbmockx help`")
         sys.exit(2)
 
 

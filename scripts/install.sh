@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# flowmock install.sh — oh-my-zsh style one-line installer
+# pbmockx install.sh — oh-my-zsh style one-line installer
 #
 # Usage:
-#   One-line:  sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/flowmock/main/install.sh)"
-#   Local:     ./install.sh
+#   One-line:  sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh)"
+#   Local:     ./scripts/install.sh
 #   Update:    ./install.sh --update
 #   Uninstall: ./install.sh --uninstall
 #
 # This script ONLY deploys the CLI tool (venv + symlink + PATH).
-# Skill installation is handled by: flowmock skill install
+# Skill installation is handled by: pbmockx skill install
 
-REPO_URL="https://github.com/zztmercury/flowmock.git"
-REPO_RAW="https://raw.githubusercontent.com/zztmercury/flowmock/main"
-INSTALL_DIR_DEFAULT="$HOME/.flowmock"
+REPO_URL="https://github.com/zztmercury/pbmockx.git"
+REPO_RAW="https://raw.githubusercontent.com/zztmercury/pbmockx/main"
+INSTALL_DIR_DEFAULT="$HOME/.pbmockx"
 PYTHON_MIN_MAJOR=3
 PYTHON_MIN_MINOR=10
 
@@ -53,22 +53,22 @@ done
 
 # --- Banner ---
 echo
-printf "${BOLD}  flowmock${NC} — capture & mock protobuf/JSON via mitmproxy\n"
+printf "${BOLD}  pbmockx${NC} — capture & mock protobuf/JSON via mitmproxy\n"
 printf "  AI agent friendly CLI + skill, Charles-style map local/remote/breakpoint\n"
 echo
 
 # --- Uninstall ---
 if [ $UNINSTALL -eq 1 ]; then
-    info "Uninstalling flowmock..."
+    info "Uninstalling pbmockx..."
     # Remove CLI symlinks
     for d in "$HOME/.local/bin" "$HOME/bin" "$HOME/.bun/bin" "/usr/local/bin"; do
-        if [ -L "$d/flowmock" ]; then
-            rm -f "$d/flowmock"
-            ok "Removed symlink: $d/flowmock"
+        if [ -L "$d/pbmockx" ]; then
+            rm -f "$d/pbmockx"
+            ok "Removed symlink: $d/pbmockx"
         fi
     done
     # Remove skill symlinks (legacy + current)
-    for sd in "$HOME/.agents/skills/flowmock" "$HOME/.agents/skills/mitmproxy-mock" "$HOME/.claude/skills/flowmock" "$HOME/.config/opencode/skills/flowmock"; do
+    for sd in "$HOME/.agents/skills/pbmockx" "$HOME/.agents/skills/mitmproxy-mock" "$HOME/.claude/skills/pbmockx" "$HOME/.config/opencode/skills/pbmockx"; do
         if [ -L "$sd/SKILL.md" ]; then
             rm -f "$sd/SKILL.md"
             rmdir "$sd" 2>/dev/null || true
@@ -87,29 +87,29 @@ fi
 
 # --- Determine script_dir (local vs remote mode) ---
 SCRIPT_DIR=""
-if [ -f "flowmock_addon.py" ] && [ -f "flowmock" ]; then
+if [ -f "addon/pbmockx_addon.py" ] && [ -f "bin/pbmockx" ]; then
     SCRIPT_DIR="$(pwd)"
-elif [ -n "${0:-}" ] && [ -f "$(dirname "$0" 2>/dev/null)/flowmock_addon.py" ]; then
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+elif [ -n "${0:-}" ] && [ -f "$(dirname "$0" 2>/dev/null)/../addon/pbmockx_addon.py" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 fi
 
 if [ -z "$SCRIPT_DIR" ]; then
     # Remote mode: clone/update
-    SCRIPT_DIR="${FLOWMOCK_HOME:-$INSTALL_DIR_DEFAULT}"
+    SCRIPT_DIR="${PBMOCKX_HOME:-$INSTALL_DIR_DEFAULT}"
     if [ -d "$SCRIPT_DIR/.git" ]; then
-        info "Updating flowmock at $SCRIPT_DIR..."
+        info "Updating pbmockx at $SCRIPT_DIR..."
         git -C "$SCRIPT_DIR" pull --ff-only
     else
-        info "Cloning flowmock to $SCRIPT_DIR..."
+        info "Cloning pbmockx to $SCRIPT_DIR..."
         git clone "$REPO_URL" "$SCRIPT_DIR"
     fi
 fi
 
 cd "$SCRIPT_DIR"
 
-if [ ! -f "flowmock" ] || [ ! -f "flowmock_addon.py" ]; then
-    err "flowmock or flowmock_addon.py not found in $SCRIPT_DIR"
-    err "This doesn't look like a flowmock project directory."
+if [ ! -f "bin/pbmockx" ] || [ ! -f "addon/pbmockx_addon.py" ]; then
+    err "bin/pbmockx or addon/pbmockx_addon.py not found in $SCRIPT_DIR"
+    err "This doesn't look like a pbmockx project directory."
     exit 1
 fi
 
@@ -193,9 +193,9 @@ if [ -z "$PREFIX" ]; then
 fi
 mkdir -p "$PREFIX"
 
-ln -sf "$SCRIPT_DIR/flowmock" "$PREFIX/flowmock"
-chmod +x "$SCRIPT_DIR/flowmock"
-ok "CLI installed → $PREFIX/flowmock"
+ln -sf "$SCRIPT_DIR/bin/pbmockx" "$PREFIX/pbmockx"
+chmod +x "$SCRIPT_DIR/bin/pbmockx"
+ok "CLI installed → $PREFIX/pbmockx"
 
 # --- PATH check + interactive shell config ---
 in_path() {
@@ -260,7 +260,7 @@ if ! in_path "$PREFIX"; then
                 else
                     cp "$RCFILE" "${RCFILE}.bak" 2>/dev/null || true
                     echo "" >> "$RCFILE"
-                    echo "# Added by flowmock install" >> "$RCFILE"
+                    echo "# Added by pbmockx install" >> "$RCFILE"
                     echo "$LINE" >> "$RCFILE"
                     ok "Added PATH to $RCFILE (backup: ${RCFILE}.bak)"
                     info "Open a new terminal or run: source $RCFILE"
@@ -268,32 +268,32 @@ if ! in_path "$PREFIX"; then
             fi
             ;;
         n|N)
-            info "Skipped. Add $PREFIX to PATH manually to use flowmock command."
+            info "Skipped. Add $PREFIX to PATH manually to use pbmockx command."
             ;;
     esac
 fi
 
 # --- Verify ---
 if in_path "$PREFIX"; then
-    if "$PREFIX/flowmock" agent-doc >/dev/null 2>&1; then
-        ok "Verification passed — flowmock CLI is ready."
+    if "$PREFIX/pbmockx" agent-doc >/dev/null 2>&1; then
+        ok "Verification passed — pbmockx CLI is ready."
     else
         warn "CLI symlink works but agent-doc failed. Check $SCRIPT_DIR/SKILL.md exists."
     fi
 else
-    info "Verify with: $PREFIX/flowmock agent-doc"
+    info "Verify with: $PREFIX/pbmockx agent-doc"
 fi
 
 # --- Summary ---
 echo
 printf "${GREEN}${BOLD}  Installation complete!${NC}\n"
 echo
-echo "  CLI:      $PREFIX/flowmock"
+echo "  CLI:      $PREFIX/pbmockx"
 echo "  Project:  $SCRIPT_DIR"
 echo "  Venv:     $VENV"
 echo
 printf "  ${BOLD}Next steps:${NC}\n"
-echo "    1. Start proxy:     flowmock start"
-echo "    2. Install skill:  flowmock skill install"
-echo "    3. Check health:   flowmock doctor"
+echo "    1. Start proxy:     pbmockx start"
+echo "    2. Install skill:  pbmockx skill install"
+echo "    3. Check health:   pbmockx doctor"
 echo
