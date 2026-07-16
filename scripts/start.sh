@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="$DIR/.venv"
 PROXY_PORT="${PROXY_PORT:-8080}"
 CONTROL_PORT="${CONTROL_PORT:-9090}"
@@ -9,7 +9,7 @@ DEVICE="${DEVICE:-}"
 
 if [ ! -x "$VENV/bin/mitmdump" ]; then
   echo "venv missing. one-time setup:"
-  echo "  curl -fsSL https://raw.githubusercontent.com/zztmercury/flowmock/main/install.sh | sh"
+  echo "  curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh | sh"
   exit 1
 fi
 
@@ -41,10 +41,10 @@ echo
 echo "=== mitmdump starting ==="
 echo "  proxy   : 127.0.0.1:$PROXY_PORT"
 echo "  control : http://127.0.0.1:$CONTROL_PORT"
-echo "  CLI     : flowmock flows"
+echo "  CLI     : pbmockx flows"
 echo
 
-exec "$VENV/bin/mitmdump" -s "$DIR/flowmock_addon.py" \
+exec "$VENV/bin/mitmdump" -s "$DIR/addon/pbmockx_addon.py" \
   --mode "regular@127.0.0.1:$PROXY_PORT" \
-  --set "flowmock_control_port=$CONTROL_PORT" \
+  --set "pbmockx_control_port=$CONTROL_PORT" \
   --flow-detail 1

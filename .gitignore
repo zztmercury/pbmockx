@@ -1,6 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
-rules.local.yaml
+rules.yaml
 *.log
 /tmp/

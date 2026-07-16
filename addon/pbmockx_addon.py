@@ -407,7 +407,7 @@ class MockEngine:
 
     def save(self):
         rules_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "rules.yaml"
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules.yaml")
         )
         try:
             from ruamel.yaml import YAML
@@ -435,7 +435,7 @@ class MockEngine:
 
     def reload(self):
         rules_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "rules.yaml"
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules.yaml")
         )
         if not os.path.exists(rules_file):
             return 0
@@ -483,7 +483,7 @@ def find_flow(fid):
 # ---------------- contentview (mitmweb human preview) ----------------
 
 class PBJsonView(Contentview):
-    name = "flowmock"
+    name = "pbmockx"
     syntax_highlight = "yaml"
 
     def render_priority(self, data, metadata):
@@ -713,19 +713,19 @@ class TapPbMock:
         global ADDON
         ADDON = self
         try:
-            ctx.options.add_option("flowmock_control_port", int, 9090, "control API port")
-            ctx.options.add_option("flowmock_control_host", str, "127.0.0.1", "control API host")
+            ctx.options.add_option("pbmockx_control_port", int, 9090, "control API port")
+            ctx.options.add_option("pbmockx_control_host", str, "127.0.0.1", "control API host")
         except Exception:
             pass
         contentviews.add(PBJsonView())
-        host = ctx.options.flowmock_control_host
-        port = ctx.options.flowmock_control_port
+        host = ctx.options.pbmockx_control_host
+        port = ctx.options.pbmockx_control_port
         n = self.mock.reload()
         if n:
             ctx.log.info(f"loaded {n} rules from rules.yaml")
         self.server = ThreadingHTTPServer((host, port), ControlHandler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        ctx.log.info(f"flowmock control API: http://{host}:{port}")
+        ctx.log.info(f"pbmockx control API: http://{host}:{port}")
 
     def request(self, flow):
         """map_remote rules: rewrite request URL before sending to server."""

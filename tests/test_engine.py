@@ -1,7 +1,7 @@
 """Offline test for PBEngine + MockRule + MockEngine: build a .desc + protobuf bytes, verify decode/encode/delimited/rules."""
-import sys
-sys.path.insert(0, ".")
-import flowmock_addon as t
+import os, sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "addon"))
+import pbmockx_addon as t
 from google.protobuf import descriptor_pb2
 
 # Build a FileDescriptorSet (.desc) for: demo.Person { string name=1; int32 id=2; }
