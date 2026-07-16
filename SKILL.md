@@ -51,16 +51,41 @@ it like normal nested dict.
 
 **Step 3 — Decide mock mode:**
 
-Four mock modes, all Charles-style:
+Decision tree (by priority):
 
-### 2.1 Patch — modify specific fields by path (one-time or persistent)
-One specific request, one-time change → single-shot (`mock`):
-- A single-shot `mock` on an already-completed flow does NOT reach the
-  client. To actually deliver it, either:
-  - `intercept on` BEFORE the user triggers the request → flow pauses →
-    `mock <id> ...` → `resume <id>`, OR
-  - `mock <id> ...` then `replay <id>` (re-issues the request with modified response).
-- All future matching requests changed persistently → continuous rule (`rules add`).
+1. **Know which field to change?** → **Patch rule** (`rules add`) — RECOMMENDED.
+   Auto-modifies matching responses, no pause, no timeout. Works for PB + JSON.
+2. **Need to replace entire response body?** → **Map Local** (`map-local add`).
+3. **Need to redirect request to another server?** → **Map Remote** (`map-remote add`).
+4. **Need to dynamically decide what to change at runtime?** → **Breakpoint** (`breakpoint add`).
+   ⚠️ Pauses flow — client waits. Agent async processing (LLM inference ~2s/step)
+   may cause client timeout. Use as last resort.
+
+### 2.1 Patch — modify specific fields by path (RECOMMENDED, no pause, no timeout)
+
+**Standard workflow (preferred for Agent):**
+```
+# 1. Capture a real request first (or ask user to trigger once)
+flowmock flows --filter 'api/game'     # find existing flow
+flowmock decode <id>                    # inspect structure, get the path
+
+# 2. Add persistent rule — auto-modifies all future matching responses
+flowmock rules add 'api/game' game.name 'MockedGame'
+flowmock rules add 'api/game' game.id 999
+
+# 3. User re-triggers request → response auto-modified → client receives mocked data
+#    No pause, no timeout ✅
+
+# 4. Verify
+flowmock flows --filter 'api/game'     # new flow captured
+flowmock decode <new_id>               # game.name=MockedGame, game.id=999
+```
+
+- Works identically for **PB and JSON** — both decoded to dict, path-patched, re-encoded.
+- `--protocol pb|json` optional filter (omit = apply to both).
+- Rules auto-save to `rules.yaml` (persist across restarts).
+- Single-shot `mock <id>` also available but does NOT reach client on completed flows
+  (use `replay <id>` to re-deliver, or use patch rule instead).
 
 ### 2.2 Map Local — replace entire response body (Charles-style)
 ```
@@ -83,10 +108,14 @@ flowmock map-remote add '<url_regex>' <replacement> --regex  # regex partial rep
 - Regex mode: `re.sub(url_regex, replacement, url)` — flexible partial replacement.
 - Useful for pointing test environment requests to a mock server.
 
-### 2.4 Breakpoint — per-URL pause (Charles-style, NOT global)
+### 2.4 Breakpoint — per-URL pause (last resort, ⚠️ may cause timeout)
 ```
 flowmock breakpoint add '<url_regex>'
 ```
+- **⚠️ Timeout risk**: breakpoint PAUSES the flow — client waits for response.
+  Agent async processing (find flow → decode → mock → resume, each step ~2s LLM)
+  may exceed client timeout. **Prefer patch rules (§2.1) unless you need
+  runtime-decided values.**
 - **Rule-based, persistent**: add once, all future matching flows auto-pause.
 - Unlike `intercept on` (which blocks ALL requests globally), breakpoint rules
   only pause matching URLs — other traffic flows normally.
@@ -105,7 +134,12 @@ flowmock breakpoint add '<url_regex>'
 - `flowmock breakpoint off` clears all breakpoint rules.
 
 **Step 4 — Execute:**
-- Patch single-shot (**recommended: breakpoint**, per-URL, doesn't block other traffic):
+- **Patch rule (RECOMMENDED — no pause, no timeout):**
+  ```
+  flowmock rules add '<url_regex>' <path> <value> [--protocol pb|json]
+  # user re-triggers → response auto-modified → client receives mocked data
+  ```
+- Patch single-shot via breakpoint (⚠️ may timeout, see §2.4):
   ```
   flowmock breakpoint add '<url_regex>'
   # ask user to trigger the request in app
@@ -114,7 +148,7 @@ flowmock breakpoint add '<url_regex>'
   flowmock resume <id>
   flowmock breakpoint off   # clear when done
   ```
-- Patch single-shot (alternative: intercept, blocks ALL traffic globally):
+- Patch single-shot via intercept (⚠️ blocks ALL traffic globally):
   ```
   flowmock intercept on
   # ask user to trigger the request in app
@@ -123,13 +157,8 @@ flowmock breakpoint add '<url_regex>'
   flowmock resume <id>
   flowmock intercept off  # turn off when done
   ```
-- Patch persistent rule:
-  ```
-  flowmock rules add '<url_regex>' <path> <value> [--protocol pb|json]
-  ```
 - Map Local: see §2.2
 - Map Remote: see §2.3
-- Breakpoint: see §2.4
 
 **Step 5 — Verify:**
 ```
