@@ -6,6 +6,7 @@
 
 协议识别后 PB 与 JSON 都抽象成 dict，AI agent 只操作 path+value，不碰 protobuf wire format。
 """
+import copy
 import importlib
 import json
 import os
@@ -753,7 +754,7 @@ class TapPbMock:
             ctx.log.warn(f"decode failed {flow.request.url}: {e}")
             return
 
-        original_data = data
+        original_data = copy.deepcopy(data)
 
         # 1. map_local rules: replace entire response body
         map_local_rules = self.mock.matched(flow.request.url, type_filter="map_local")
@@ -789,20 +790,24 @@ class TapPbMock:
                 ctx.log.warn(f"map_local rule failed: {e}")
 
         # 2. patch rules: modify specific fields
+        # Work on a deepcopy so encode failure doesn't corrupt decoded view
         patch_rules = self.mock.matched(flow.request.url, info["protocol"], "patch")
         if patch_rules:
+            patched = copy.deepcopy(data)
             changed = False
             for r in patch_rules:
                 try:
-                    set_by_path(data, parse_path(r.path), r.value)
+                    set_by_path(patched, parse_path(r.path), r.value)
                     changed = True
                 except Exception as e:
                     ctx.log.warn(f"mock rule {r.path} failed: {e}")
             if changed:
                 try:
-                    flow.response.content = self.codec.encode(info, data)
+                    flow.response.content = self.codec.encode(info, patched)
+                    data = patched  # only update on encode success
                 except Exception as e:
                     ctx.log.warn(f"re-encode failed {flow.request.url}: {e}")
+                    # encode failed: data stays as-is (original), response.content unchanged
 
         # 3. breakpoint rules: pause flow for manual editing
         bp_rules = self.mock.matched(flow.request.url, type_filter="breakpoint")
