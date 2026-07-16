@@ -20,7 +20,7 @@ addon 自动识别协议（按 Charles Protocol Buffers 自描述规则：Conten
 
 ## 安装
 
-### 一行安装（oh-my-zsh 式）
+### 一行安装
 ```bash
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/flowmock/main/install.sh)"
 ```
@@ -97,7 +97,7 @@ flowmock start / stop / restart                # 启动/停止/重启
 ## 文件
 - `flowmock_addon.py` — mitmproxy addon（协议识别/PB/JSON/dict/双向/mock/control API/contentview）
 - `flowmock` — CLI（纯 stdlib，调 control API + 工具维护）
-- `install.sh` — oh-my-zsh 式一键安装
+- `install.sh` — 一键安装（curl | sh）
 - `start.sh` — 启动脚本（adb reverse + 设备代理 + mitmdump）
 - `SKILL.md` — agent 文档（与 CLI `agent-doc` 同源）
 - `rules.yaml` — 持久化 mock 规则（启动时自动加载，运行时实时写回）
