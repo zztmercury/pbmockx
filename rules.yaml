@@ -1,1 +1,54 @@
+# Persistent mock rules — auto-loaded on addon start.
+# Runtime add/del auto-saves to this file. You can also edit manually.
+# Save preserves this header (everything before the first list item).
+#
+# All rules have: id (auto), type, url_pattern
+#   type:        patch | map_local | map_remote | breakpoint
+#   url_pattern: regex matched against request URL (re.search)
+#
+# patch type (modify specific field by path):
+#   path:        field path in decoded dict, e.g. game.name, items[0].id
+#   value:       new value (any JSON type)
+#   protocol:    optional 'protobuf' | 'json' (skip if mismatch)
+#
+# map_local type (replace entire response body, Charles-style):
+#   source:      'file' (raw bytes) or 'data' (dict→PB auto-encode)
+#   file_path:   local file path (source=file)
+#   data:        JSON dict (source=data, auto-encoded to PB)
+#   desc:        desc URL (source=data, if not auto-detected from flow_store)
+#   messageType: protobuf message type name (source=data)
+#   delimited:   true for length-delimited PB streams
+#   status:      override HTTP status code
+#   headers:     object of header overrides
+#
+# map_remote type (redirect request URL, Charles-style):
+#   replacement: new URL (full replacement) or regex replacement string
+#   is_regex:    true for regex partial replacement, false for full URL replacement
+#
+# breakpoint type (per-URL pause, Charles-style):
+#   phase:       'response' (only phase supported currently)
+#
+# Examples (uncomment to enable):
+#
+# - type: patch
+#   url_pattern: 'api/game'
+#   path: 'game.name'
+#   value: 'MockedGame'
+#   protocol: protobuf
+#
+# - type: map_local
+#   url_pattern: 'api/game'
+#   source: data
+#   data:
+#     game:
+#       name: 'MockedGame'
+#
+# - type: map_remote
+#   url_pattern: 'api\.test\.com'
+#   replacement: 'http://mock-server.com'
+#   is_regex: false
+#
+# - type: breakpoint
+#   url_pattern: 'api/game'
+#   phase: response
 []

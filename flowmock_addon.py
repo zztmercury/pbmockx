@@ -411,9 +411,20 @@ class MockEngine:
         try:
             from ruamel.yaml import YAML
             yaml = YAML(typ="safe")
+            # Preserve header comments (lines starting with # or blank, before first data line)
+            header = []
+            if os.path.exists(rules_file):
+                with open(rules_file) as f:
+                    for line in f:
+                        if line.strip().startswith('#') or not line.strip():
+                            header.append(line)
+                        else:
+                            break
             data = [r.to_dict() for r in self.rules]
             tmp = rules_file + ".tmp"
             with open(tmp, "w") as f:
+                if header:
+                    f.writelines(header)
                 yaml.dump(data, f)
             os.replace(tmp, rules_file)
             return True

@@ -176,8 +176,10 @@ find_prefix() {
     for d in "${DIRS[@]}"; do
         [ -d "$d" ] || continue
         [ -w "$d" ] || continue
+        # Skip system dirs and hidden tool dirs (.bun, .cargo, .jenv, .proto, etc.)
         case "$d" in
             /usr/bin|/bin|/usr/sbin|/sbin|/System/*) continue ;;
+            */.*/bin|*/.*/bin/*) continue ;;
         esac
         echo "$d"
         return 0
