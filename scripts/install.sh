@@ -84,6 +84,15 @@ WHISTLE_MIN="2.9.100"
 # --- Uninstall ---
 if [ $UNINSTALL -eq 1 ]; then
     info "Uninstalling pbmockx..."
+    # Remove pipe rule from whistle
+    PIPE_JS="/tmp/.pbmockx-pipe.js"
+    cat > "$PIPE_JS" << 'PIPEOF'
+exports.name = 'pbmockx-pipe';
+exports.rules = '';
+PIPEOF
+    w2 add "$PIPE_JS" --force 2>/dev/null || true
+    rm -f "$PIPE_JS"
+    # Unregister plugin
     w2 uninstall whistle.pbmockx 2>/dev/null || true
     npm unlink -g whistle.pbmockx 2>/dev/null || true
     pbmockx skill uninstall 2>/dev/null || true
@@ -91,7 +100,7 @@ if [ $UNINSTALL -eq 1 ]; then
         info "Removing $INSTALL_DIR_DEFAULT..."
         rm -rf "$INSTALL_DIR_DEFAULT"
     fi
-    ok "Uninstalled. Run: w2 stop"
+    ok "Uninstalled. Run: w2 restart"
     exit 0
 fi
 
@@ -141,12 +150,21 @@ npm install --silent || { err "npm install failed"; exit 1; }
 npx tsc || { err "TypeScript build failed"; exit 1; }
 ok "Plugin built"
 
-# --- Step 4: Register plugin to whistle ---
+# --- Step 4: Register plugin + add pipe rule ---
 info "Registering whistle.pbmockx plugin..."
-# Use w2 install to register the plugin globally
 w2 install "$PLUGIN_DIR" 2>/dev/null || true
-# Also support -A flag for local dev
 ok "Plugin registered"
+
+# Add pipe rule to whistle (enables decode→patch→encode for all requests)
+info "Adding pipe rule to whistle..."
+PIPE_JS="/tmp/.pbmockx-pipe.js"
+cat > "$PIPE_JS" << 'PIPEOF'
+exports.name = 'pbmockx-pipe';
+exports.rules = '* pipe://pbmockx';
+PIPEOF
+w2 add "$PIPE_JS" --force 2>/dev/null && ok "Pipe rule added (* pipe://pbmockx)" || warn "Failed to add pipe rule. Add manually: * pipe://pbmockx"
+rm -f "$PIPE_JS"
+
 info "Start with: w2 start -A $PLUGIN_DIR"
 
 # --- Step 5: npm link for short command ---
