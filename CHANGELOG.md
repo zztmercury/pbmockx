@@ -9,48 +9,38 @@
 
 ### 重大变更 — 迁移到 whistle 插件
 
-从 mitmproxy addon 迁移到 whistle 插件架构，解决 mitmweb 查看 PB/JSON 数据交互体验差的问题。
+从 mitmproxy Python addon 迁移到 whistle Node.js 插件，解决 mitmweb 查看 PB/JSON 数据交互体验差的问题。
 
 ### 新增
 - **whistle.pbmockx 插件**（`whistle-plugin/`）：Node.js/TypeScript，运行在 whistle 进程内
-  - **pipe hooks**（resRead/reqRead）：单向 decode→patch→encode，resWrite/reqWrite 透传
-  - **PBView 子标签页**：Request/Response 区各注入一个 **PBView** 子标签页（`inspectorsTab.req` + `inspectorsTab.res`，**不是独立的 Protobuf 父级 tab**），通过 `whistleBridge.addSessionActiveListener` + `getActiveSession` 拉取 session body，POST 到 `/cgi-bin/decode-pb` 渲染字段树
-  - **rulesServer hook**：将 map_remote / map_local(file) 规则翻译为 whistle 原生规则
+  - **pipe hooks**（resRead/reqRead）：decode→patch→encode 单向处理，自动解压 gzip/deflate/br
+  - **PBView 子标签页**：Request/Response 区各注入一个 PBView 子标签页，展示 PB 字段树
+    - 格式 `name#N (type) = value`，带字段号、类型标注
+    - `google.protobuf.Any` 按 `type_url` 嵌套解码
+    - 未设置字段显示 `(unset)`，默认折叠
+  - **rulesServer hook**：map_remote / map_local(file) 自动翻译为 whistle 原生规则
   - **uiServer**（Koa）：CGI API 供 CLI 和 PBView 调用
-- **PB 字段树格式**：`name#N (type) = value`——字段名 + **字段号**（`#N`）+ 类型标注 + 值，int64 显示数字 + `(int64)`，enum 显示数字 + 名字 + `(enum)`，`google.protobuf.Any` 按 **`type_url`** 嵌套解码（显示 `Any → <type>`），未设置字段显示 `(unset)`（灰色斜体），**默认折叠**
-- **PB 引擎用 protobufjs 重写**（`src/pb-engine.ts`）：
-  - `Root.fromDescriptor()` + `resolveAll()`，`encodeDelimited`/`decodeDelimited` 处理 length-delimited
-  - **monkey-patch `Root.fromDescriptor` 跳过内部 `resolveAll`**——先注入 WKT 定义（`descriptor.json` 等通过 `root.addJSON(...)` 加载），再手动 `resolveAll`，避免解析自描述 `.desc` 时找不到 WKT 引用而抛错
-  - **`long` 库处理 int64 精度**
-- **pipe hook 自动解压**：resRead 检测 `content-encoding`（gzip/deflate/br），用 `zlib.gunzipSync` / `inflateSync` / `brotliDecompressSync` 解压后 decode→patch→encode，**返回未压缩 body，由 whistle 负责重新加 content-encoding**（客户端和 Web UI 都看到原始字节）
-- **响应头取自 `req.headers`**：whistle pipe resRead 中，response headers 在 `req.headers` 而非 `req.originalRes.headers`（后者在 pipe 场景为空）
-- **Node.js CLI**（`bin/cli.js`）：通过 `w2 exec pbmockx` 或 npm link 后 `pbmockx` 直接调用
-  - **所有命令支持 `-h` / `--help`**（顶层 + 各子命令各有帮助）
-  - **`decode <id>` 显示 headers + PB 字段树**，支持 `--req`（只看 request）/ `--res`（只看 response）/ `--original`（patch 前原始数据）
-- **pipe 规则**：`pattern pipe://pbmockx` 按需启用 decode→patch→encode
+- **PB 引擎用 protobufjs 重写**：`Root.fromDescriptor` 动态加载，`long` 库处理 int64 精度，不转 JSON（直接操作 message 对象，避免 int64→string / enum→string 歧义）
+- **Node.js CLI**（`bin/cli.js`）：所有命令支持 `-h`/`--help`，`decode <id>` 显示 headers + 字段树，支持 `--req`/`--res`/`--original`
 
 ### 变更
-- **进程管理交给 w2**：`w2 start` / `w2 stop` / `w2 restart` / `w2 status` 替代 pbmockx start/stop/restart
+- **进程管理交给 w2**：`w2 start` / `w2 stop` / `w2 restart` 替代 pbmockx start/stop/restart
 - **PC 证书**：`w2 ca` 替代手动安装
-- **CLI 改为 Node.js**：从 Python（787 行纯 stdlib）重写为 Node.js，通过插件 CGI API 通信
-- **PB 不转 JSON**：直接操作 message 对象，避免 int64→string / enum→string 歧义
+- **CLI 从 Python 重写为 Node.js**：通过 `w2 exec pbmockx` 或 npm link 调用，通过插件 CGI API 通信
+- **PB 不转 JSON**：直接操作 message 对象，int64 是数字、enum 是数字，不做 proto3 JSON 序列化
 - **JSON 展示交给 whistle**：whistle 自带 pretty-JSON 视图，插件不做
-- **map_local(data) 数据存外部文件**：rules.yaml 只存引用（data_file），大 dict 在 mock-data/\<id\>.json
-- **规则配置**：`pattern pipe://pbmockx` 启用 PB mock；map_remote/map_local(file) 由 rulesServer 自动翻译为 whistle 原生规则
-- **PBView 前端 JS 内联**：`pb-req.html` / `pb-res.html` 各自内联 JS（无外部 `pb-view.js`），减少网络请求
-- **测试全 Node.js**：test_server.ts + test_pb-engine.ts（13 个单元测试全通过）
+- **map_local(data) 数据存外部文件**：rules.yaml 只存引用，大 dict 在 mock-data/\<id\>.json
 - **install.sh 重写**：检查 Node.js>=18 + whistle 版本检查（未装→安装/符合→跳过/不符→中断）
-- **lack 不在 install.sh**（dev-only 工具）
+- **测试全 Node.js**：test_server.ts + test_pb-engine.ts（13 个单元测试）
+- **skill install 只装 .agents 和 .claude**：不再装到 .config/opencode
 
 ### 移除
 - ~~breakpoint~~：Web 交互难设计，移除（用 patch 规则替代）
 - ~~mock/resume/abort/replay/intercept~~：随 breakpoint 一并移除
-- ~~map-remote CLI 的内置执行~~：改为 rulesServer 翻译为 whistle 原生规则
-- ~~Python CLI（`bin/pbmockx`）~~：改为 Node.js CLI（`whistle-plugin/bin/cli.js`）
+- ~~Python CLI（`bin/pbmockx`）~~：改为 Node.js CLI
 - ~~Python 测试~~：改为 Node.js 测试
-- ~~`scripts/start.sh`~~：mitmweb 旧启动脚本移除（保留 `scripts/start-mitmproxy.sh` 作为 legacy fallback 启动器）
-- ~~旧版 inspectorsTab 文件 `public/pb-view.html` + `pb-view.js`~~：合并进 `pb-req.html` / `pb-res.html`（JS 内联）
-- ~~`networkColumn`（Network 列表 PB Type 列）~~：whistle `whistleConfig` 不再声明，避免列名冲突
+- ~~`scripts/start.sh`~~：旧 mitmweb 启动脚本
+- ~~networkColumn（PB Type 列）~~：不再需要
 
 ### 保留
 - `addon/pbmockx_addon.py` + `scripts/start-mitmproxy.sh`：mitmproxy 版本作为 fallback（无 Node.js 环境）
