@@ -79,6 +79,7 @@ Commands:
   web                             Open whistle Web UI
   connect-android [-s <serial>]   Configure Android proxy + cert
   doctor                          Check w2 + plugin + rules health
+  fix                             Auto-repair plugin (re-link + restart)
   agent-doc                       Print SKILL.md
   skill install                   Install SKILL.md to agent dirs
   version [--check]               Show version
@@ -181,7 +182,8 @@ Options:
 
 function helpWeb() { console.log(`Usage: pbmockx web\n\nOpen whistle Web UI in browser.`); }
 function helpConnectAndroid() { console.log(`Usage: pbmockx connect-android [-s <serial>]\n\nConfigure Android device proxy + cert.`); }
-function helpDoctor() { console.log(`Usage: pbmockx doctor\n\nCheck w2 + plugin + rules health.`); }
+function helpDoctor() { console.log(`Usage: pbmockx doctor\n\nCheck w2 + plugin + rules health.\n\nIf plugin is not reachable, run 'pbmockx fix' to auto-repair.`); }
+function helpFix() { console.log(`Usage: pbmockx fix\n\nAuto-repair plugin installation:\n  1. Rebuild (npm install + tsc) if needed\n  2. Re-link (npm link) if unlinked\n  3. Restart whistle to reload plugin + rules.txt\n\nUse when plugin was uninstalled from Web UI or npm link broke.`); }
 function helpAgentDoc() { console.log(`Usage: pbmockx agent-doc\n\nPrint SKILL.md content.`); }
 function helpSkill() { console.log(`Usage: pbmockx skill <install|list|uninstall>\n\nManage SKILL.md in agent directories (~/.agents/skills/ and ~/.claude/skills/).`); }
 function helpVersion() { console.log(`Usage: pbmockx version [--check]\n\nShow version (optionally check GitHub for updates).`); }
@@ -443,11 +445,86 @@ async function cmd_doctor(args) {
     const w2ver = execSync('w2 --version', { stdio: 'pipe' }).toString().trim();
     console.log('whistle:', w2ver);
   } catch { console.log('whistle: NOT FOUND (install: npm i -g whistle)'); }
+  let pluginOk = false;
   try {
     const health = await _req('GET', '/cgi-bin/health');
+    pluginOk = health.ok;
     console.log('Plugin:', health.ok ? 'OK' : 'FAIL', '| flows:', health.flow_count, '| rules:', health.rules);
-  } catch (e) { console.log('Plugin: NOT REACHABLE (', e.message, ')'); }
+  } catch (e) {
+    console.log('Plugin: NOT REACHABLE (', e.message, ')');
+    console.log('  → Run: pbmockx fix');
+  }
+  // Check npm link
+  try {
+    execSync('npm ls -g whistle.pbmockx --depth=0', { stdio: 'pipe' });
+    console.log('npm link: OK');
+  } catch {
+    console.log('npm link: NOT LINKED (run: pbmockx fix)');
+    if (pluginOk) { /* plugin works but link is broken — pbmockx command might not work */ }
+  }
   console.log('pbmockx version:', readVersion());
+}
+
+async function cmd_fix(args) {
+  if (hasHelp(args)) { helpFix(); return; }
+  console.log('=== pbmockx fix ===');
+  const pluginDir = PLUGIN_ROOT;
+
+  // Step 1: Check if dist/ exists, rebuild if missing
+  const distDir = path.join(pluginDir, 'dist');
+  if (!fs.existsSync(distDir)) {
+    console.log('[1/3] dist/ missing — rebuilding...');
+    try {
+      execSync('npm install', { cwd: pluginDir, stdio: 'inherit' });
+      execSync('npx tsc', { cwd: pluginDir, stdio: 'inherit' });
+      console.log('  ✓ Built');
+    } catch (e) { console.error('  ✗ Build failed:', e.message); process.exit(1); }
+  } else {
+    console.log('[1/3] dist/ exists — skip build');
+  }
+
+  // Step 2: Re-link npm
+  console.log('[2/3] Re-linking npm...');
+  try {
+    execSync('npm link', { cwd: pluginDir, stdio: 'pipe' });
+    console.log('  ✓ npm link OK');
+  } catch (e) {
+    console.error('  ✗ npm link failed (try: sudo npm link)', e.message);
+    process.exit(1);
+  }
+
+  // Step 3: Restart whistle
+  console.log('[3/3] Restarting whistle...');
+  try {
+    execSync('w2 restart', { stdio: 'pipe' });
+    console.log('  ✓ whistle restarted');
+  } catch {
+    try {
+      execSync('w2 start', { stdio: 'pipe' });
+      console.log('  ✓ whistle started');
+    } catch (e2) {
+      console.error('  ✗ whistle start failed:', e2.message);
+      process.exit(1);
+    }
+  }
+
+  // Wait for whistle to load plugin
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Verify
+  try {
+    const health = await _req('GET', '/cgi-bin/health');
+    if (health.ok) {
+      console.log('\n✓ Plugin recovered! flows:', health.flow_count, 'rules:', health.rules);
+    } else {
+      console.error('\n✗ Plugin still not healthy. Check: w2 start, or Web UI Plugins page');
+    }
+  } catch (e) {
+    console.error('\n✗ Plugin not reachable after fix. Check:');
+    console.error('  1. whistle running: w2 status');
+    console.error('  2. plugin installed: w2 install ' + pluginDir);
+    console.error('  3. Web UI Plugins page — is whistle.pbmockx enabled?');
+  }
 }
 
 function cmd_agent_doc(args) {
@@ -547,6 +624,7 @@ async function main() {
       case 'web': cmd_web(args); break;
       case 'connect-android': cmd_connect_android(args); break;
       case 'doctor': await cmd_doctor(args); break;
+      case 'fix': await cmd_fix(args); break;
       case 'agent-doc': cmd_agent_doc(args); break;
       case 'skill': cmd_skill(args); break;
       case 'version': await cmd_version(args); break;

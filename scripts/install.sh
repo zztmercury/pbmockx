@@ -84,9 +84,21 @@ WHISTLE_MIN="2.9.100"
 # --- Uninstall ---
 if [ $UNINSTALL -eq 1 ]; then
     info "Uninstalling pbmockx..."
+    # Remove pipe rule (clear the old w2 add rules file if exists)
+    PIPE_JS="/tmp/.pbmockx-pipe.js"
+    cat > "$PIPE_JS" << 'PIPEOF'
+exports.name = 'pbmockx-pipe';
+exports.rules = '';
+PIPEOF
+    w2 add "$PIPE_JS" --force 2>/dev/null || true
+    rm -f "$PIPE_JS"
+    # Unregister plugin from whistle
     w2 uninstall whistle.pbmockx 2>/dev/null || true
+    # Remove npm link (undo 'npm link')
     npm unlink -g whistle.pbmockx 2>/dev/null || true
+    # Remove skill
     pbmockx skill uninstall 2>/dev/null || true
+    # Remove cloned repo
     if [ -d "$INSTALL_DIR_DEFAULT" ] && [ "$PROJECT_ROOT" = "$INSTALL_DIR_DEFAULT" ]; then
         info "Removing $INSTALL_DIR_DEFAULT..."
         rm -rf "$INSTALL_DIR_DEFAULT"
