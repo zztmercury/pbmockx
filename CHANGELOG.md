@@ -49,10 +49,8 @@
 - ~~Python CLI（`bin/pbmockx`）~~：改为 Node.js CLI
 - ~~Python 测试~~：改为 Node.js 测试
 - ~~`scripts/start.sh`~~：旧 mitmweb 启动脚本
+- ~~`addon/pbmockx_addon.py` + `scripts/start-mitmproxy.sh`~~：mitmproxy fallback 已移除
 - ~~networkColumn（PB Type 列）~~：不再需要
-
-### 保留
-- `addon/pbmockx_addon.py` + `scripts/start-mitmproxy.sh`：mitmproxy 版本作为 fallback（无 Node.js 环境）
 
 ## [0.3.0] - 2026-07-17
 

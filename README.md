@@ -113,14 +113,12 @@ pbmockx <command> -h / --help                  # 各命令的详细帮助（flow
   - `public/pb-req.html` / `pb-res.html` — PBView 子标签页（Request/Response 各一份，JS 内联无外部脚本），通过 whistleBridge 的 `addSessionActiveListener` + `getActiveSession` 拉取 session body
   - `bin/cli.js` — Node.js CLI（支持 `-h`/`--help`，`decode` 默认折叠模式 + `--path`/`--full`）
   - `rules.txt` — 插件级规则（`* pipe://pbmockx`），加载插件时自动注入，全量 pipe 无需手写
-- `addon/pbmockx_addon.py` — mitmproxy 版本（保留作 fallback）
 - `scripts/install.sh` — 一键安装（Node.js + whistle + 构建 + npm link + skill）；支持 `--update` / `--uninstall`
-- `scripts/start-mitmproxy.sh` — mitmproxy 启动（fallback）
 - `docs/SKILL.md` — agent 文档（与 CLI `agent-doc` 同源）
 - `rules.yaml.example` — 规则模板
 - `tests/test_server.ts` + `test_pb-engine.ts` — 测试（100% Node.js）
 
-> 已删除：`bin/pbmockx`（Python CLI）、`scripts/start.sh`、旧版 `public/pb-view.html` + `pb-view.js`（已合并进 `pb-req.html` / `pb-res.html`）。whistle `networkColumn`（PB Type 列）也已移除。
+> 已删除：`bin/pbmockx`（Python CLI）、`scripts/start.sh`、`addon/pbmockx_addon.py`、`scripts/start-mitmproxy.sh`、旧版 `public/pb-view.html` + `pb-view.js`（已合并进 `pb-req.html` / `pb-res.html`）。whistle `networkColumn`（PB Type 列）也已移除。
 
 ## 与 Charles 对比
 | | Charles | pbmockx (whistle) |

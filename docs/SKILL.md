@@ -319,7 +319,7 @@ protobufjs 的 message 对象（`decodeDelimited` → `set_by_path` →
   示例：`patch_error: ... invalid literal for int() with base 10: 'sku1'`
   → 该字段是 int，你传了非数字字符串。
 
-> 对比旧版（v0.3.0 mitmproxy）：PB 解码为 JSON 时 int64 会变成字符串、enum
+> 对比旧版（v0.3.0 mitmproxy，已删除）：PB 解码为 JSON 时 int64 会变成字符串、enum
 > 会变成字符串名，存在歧义。v0.4.0 通过不转 JSON 直接消除了这些问题。
 
 ### pipe 规则（patch 生效的前提）
