@@ -44,9 +44,10 @@ w2 / 插件 / 规则 / 流量。解读结果：
 | 结果 | 含义 | 操作 |
 |---|---|---|
 | w2: NOT running | whistle 未启动 | 运行 `w2 start`（后台 daemon，非阻塞）。 |
-| plugin: NOT loaded | 插件未注册 | 检查 `~/.WhistlePlugins/npm_modules/whistle.pbmockx` 是否存在；若缺失，`w2 install whistle.pbmockx`。 |
+| plugin: NOT loaded / NOT REACHABLE | 插件未注册或 npm link 失效 | 运行 `pbmockx fix`（自动 rebuild → npm link → w2 restart → verify）。若仍未恢复，检查 `npm ls -g whistle.pbmockx`，必要时重新跑 `./scripts/install.sh`。 |
 | plugin: OK, traffic: NO traffic | 插件已加载但没有流量 | 代理/证书未就绪 或 应用空闲。让用户操作应用（打开页面/搜索）触发流量，然后重新检查。如果应用有活动后流量仍为 0 → 证书未安装或设备代理未设置（指引：PC 运行 `w2 ca` 安装 CA；Android 设备运行 `pbmockx connect-android` 配置代理）。 |
 | plugin: OK (flow_count=N>0) | 就绪 | 进入工作流 |
+| npm link: NOT LINKED | `pbmockx` 短命令不可用（插件本身可能正常） | 运行 `pbmockx fix` 重新 link；在修复前用 `w2 exec pbmockx <cmd>` 代替。 |
 
 永远不要假设 whistle 已在运行 —— 必须先用 `doctor` 验证。
 
@@ -103,11 +104,11 @@ pbmockx flows
 
 ### 2.1 Patch — 按路径修改指定字段（推荐，不暂停、不超时）
 
-patch 通过 whistle 的 **pipe 机制**生效：你在 whistle 规则里写
-`<pattern> pipe://pbmockx`（用 `*` 匹配所有，或用具体 pattern），pbmockx 会
-接管匹配的请求 —— **自动解压 gzip/deflate/br** → 解码 → 应用 patch 规则 →
-重新编码 → 返回**未压缩** body（whistle 会自动处理 `content-encoding`，无需
-手动 re-compress）。**不暂停、不超时。**
+patch 通过 whistle 的 **pipe 机制**生效：插件加载时由 `whistle-plugin/rules.txt`
+自动注入 `* pipe://pbmockx` 全量规则，pbmockx 会接管所有请求 —— **自动解压
+gzip/deflate/br** → 解码 → 应用 patch 规则 → 重新编码 → 返回**未压缩** body
+（whistle 会自动处理 `content-encoding`，无需手动 re-compress）。**不暂停、不超时。**
+（如需选择性 pipe，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则覆盖。）
 
 **标准工作流（Agent 首选）：**
 ```
@@ -115,12 +116,9 @@ patch 通过 whistle 的 **pipe 机制**生效：你在 whistle 规则里写
 pbmockx flows --filter 'api/game'     # 找到已有 flow
 pbmockx decode <id>                    # 查看字段树，拿到 path
 
-# 2. 添加持久规则 + 在 whistle 写 pipe 规则
+# 2. 添加持久规则（pipe 规则由 rules.txt 自动注入，无需手写）
 pbmockx rules add 'api/game' game.name 'MockedGame'
 pbmockx rules add 'api/game' game.id 999
-#    在 whistle UI 里加规则：pattern "api/game" → "pipe://pbmockx"
-#    （或 pattern "*" → "pipe://pbmockx" 全量接管；map_remote 不触发 patch，
-#     必须用 pipe://pbmockx）
 
 # 3. 用户重新触发请求 → 响应自动修改 → 客户端收到 mock 数据
 #    不暂停、不超时 ✅
@@ -135,8 +133,8 @@ pbmockx decode <new_id> --original    # patch 前: game.name=TapTap (对比)
   再重新编码。区别只是 PB 的字段树有类型标注。
 - `--protocol pb|json` 可选过滤（省略 = 同时应用两者）。
 - 规则自动保存到 `rules.yaml`（重启后依然存在）。
-- **管道规则是 patch 生效的前提** —— 只加 `rules add` 而不在 whistle
-  里写 `pipe://pbmockx`，patch 不会被执行。
+- **pipe 规则由 `rules.txt` 自动注入** —— 只加 `rules add` 即可生效，
+  无需在 whistle UI 里手写 `pipe://pbmockx` 规则。
 
 ### 2.2 Map Local — 替换整个响应 body
 
@@ -182,10 +180,9 @@ pbmockx map-remote del <id>
 **第 4 步 — 执行：**
 - **Patch 规则（推荐 —— 不暂停、不超时）：**
   ```
-  # 1. 添加持久规则
+  # 1. 添加持久规则（pipe 规则由 rules.txt 自动注入，无需手写）
   pbmockx rules add '<url_regex>' <path> <value> [--protocol pb|json]
-  # 2. 在 whistle UI 添加 pipe 规则：pattern "<url_regex>" → "pipe://pbmockx"
-  # 3. 用户重新触发 → 响应自动修改 → 客户端收到 mock 数据
+  # 2. 用户重新触发 → 响应自动修改 → 客户端收到 mock 数据
   ```
 - Map Local：见 §2.2
 - Map Remote：见 §2.3
@@ -252,9 +249,10 @@ pbmockx map-remote del <id>
 
 ### 工具维护
 ```
-pbmockx doctor                        # 全链路健康检查（w2 + 插件 + 规则 + 流量）
+pbmockx doctor                        # 全链路健康检查（w2 + 插件 + npm link + 规则 + 流量）
+pbmockx fix                           # 自动修复：rebuild（dist 缺失时）→ npm link → w2 restart → verify
 pbmockx agent-doc                     # 打印本指南
-pbmockx skill install                 # 安装到 agent skill 目录
+pbmockx skill install                 # 安装到 agent skill 目录（~/.agents/skills/ + ~/.claude/skills/）
 pbmockx version [--check]             # 显示版本；--check 查询 GitHub 最新版
 ```
 
@@ -298,10 +296,12 @@ protobufjs 的 message 对象（`decodeDelimited` → `set_by_path` →
 > 会变成字符串名，存在歧义。v0.4.0 通过不转 JSON 直接消除了这些问题。
 
 ### pipe 规则（patch 生效的前提）
-patch 规则只有在匹配请求经过 `pipe://pbmockx` 时才会执行。在 whistle UI
-添加规则（`*` 匹配所有请求；或填具体 pattern）：
+patch 规则只有在匹配请求经过 `pipe://pbmockx` 时才会执行。**插件加载时由
+`whistle-plugin/rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，默认所有请求
+都走 pipe，无需用户手动配置。** 如需选择性 pipe，可在 whistle UI 的 Rules 里加
+更具体的规则覆盖：
 ```
-pattern: api/game      （或 * ）
+pattern: api/game      （比 * 更具体，只 pipe 匹配的请求）
 operator: pipe://pbmockx
 ```
 匹配的请求会走 pbmockx 的「自动解压 gzip/deflate/br → decode → patch →
@@ -312,14 +312,17 @@ encode」管道，返回**未压缩** body —— whistle 会自动处理 conten
 ## 5. 故障排查
 - **`pbmockx doctor` 报 `w2: NOT running`**：运行 `w2 start`。若 `w2` 命令
   不存在 → 安装 whistle：`npm i -g whistle`。
-- **`pbmockx doctor` 报 `plugin: NOT loaded`**：插件未安装。运行
-  `w2 install whistle.pbmockx`（或 `w2 i whistle.pbmockx`）。安装后重启
-  `w2 restart`。
+- **`pbmockx doctor` 报 `plugin: NOT loaded` / `NOT REACHABLE` 或
+  `npm link: NOT LINKED`**：插件未注册或 npm link 失效。直接运行
+  `pbmockx fix`（自动 rebuild → npm link → w2 restart → verify health）。
+  若仍未恢复，重新跑 `./scripts/install.sh`；修复前可用 `w2 exec pbmockx <cmd>`
+  作为替代调用。
 - **`flows` 一直为空 / `flow_count=0`**：见前置检查 —— 证书/代理/应用空闲。
   PC: `w2 ca` 安装证书；Android: `pbmockx connect-android`。
-- **patch 规则不生效**：检查是否在 whistle 里写了对应的
-  `pipe://pbmockx` 规则（§4 末尾）。没有 pipe 规则，patch 不会被执行。
-  也检查 `url_regex` 是否真的匹配请求 URL。
+- **patch 规则不生效**：默认 `* pipe://pbmockx` 由 `rules.txt` 自动注入，
+  无需手写 pipe 规则。如果你在 whistle UI 里改过 Rules（覆盖了 `*` 规则），
+  确认对应 pattern 仍指向 `pipe://pbmockx`（§4 末尾）。同时检查 `url_regex`
+  是否真的匹配请求 URL。
 - **`decode` 返回 `error: "Couldn't find message X"`**：.desc 已加载但
   message X 的文件添加失败（缺少 google well-known 依赖）—— 这是
   插件 bug，请上报。或 `desc` URL 不可达 / `messageType` 错误：检查

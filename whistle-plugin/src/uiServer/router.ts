@@ -59,10 +59,10 @@ export default function setupRouter(router: Router) {
       url: r.url,
       method: r.method,
       status: r.status,
-      protocol: r.info.protocol,
-      messageType: r.info.messageType,
-      delimited: r.info.delimited,
-      direction: r.direction,
+      reqProto: r.reqInfo?.protocol,
+      resProto: r.resInfo?.protocol,
+      hasReq: r.hasReq,
+      hasRes: r.hasRes,
       error: r.error,
       patchError: r.patchError,
     }));
@@ -75,55 +75,58 @@ export default function setupRouter(router: Router) {
     if (!rec) { ctx.status = 404; ctx.body = { error: 'not found' }; return; }
 
     const original = ctx.query.original !== undefined;
-    const baseResponse: any = {
+    const result: any = {
       id: rec.id, url: rec.url, method: rec.method, status: rec.status,
-      protocol: rec.info.protocol,
-      desc: rec.info.desc, messageType: rec.info.messageType,
-      delimited: rec.info.delimited,
-      reqHeaders: rec.reqHeaders,
-      resHeaders: rec.resHeaders,
-      direction: rec.direction,
+      reqHeaders: rec.reqHeaders, resHeaders: rec.resHeaders,
+      hasReq: rec.hasReq, hasRes: rec.hasRes,
       error: rec.error, patchError: rec.patchError,
     };
 
-    if (original && rec.originalRaw) {
-      // Re-decode original bytes
-      try {
-        if (rec.info.protocol === 'protobuf' && rec.info.desc && rec.info.messageType) {
-          const originalDecoded = await pbEngine.decode(
-            rec.info.desc, rec.info.messageType, rec.info.delimited, rec.originalRaw
-          );
-          const MsgType = await pbEngine.getMessageType(rec.info.desc, rec.info.messageType);
+    // Request data
+    if (rec.reqInfo && (rec.reqDecoded || original)) {
+      const reqInfo = rec.reqInfo;
+      const reqData = original && rec.reqOriginalRaw ? await tryDecode(reqInfo, rec.reqOriginalRaw) : rec.reqDecoded;
+      if (reqInfo.protocol === 'protobuf' && reqData && reqInfo.desc && reqInfo.messageType) {
+        try {
+          const MsgType = await pbEngine.getMessageType(reqInfo.desc, reqInfo.messageType);
           const root = MsgType.root as any;
-          const tree = await buildFieldTree(originalDecoded, MsgType, root);
-          ctx.body = { ...baseResponse, data: tree, isOriginal: true };
-          return;
-        } else if (rec.info.protocol === 'json') {
-          ctx.body = { ...baseResponse, data: JSON.parse(rec.originalRaw.toString('utf-8')), isOriginal: true };
-          return;
-        }
-      } catch (e: any) {
-        ctx.body = { ...baseResponse, error: `original decode failed: ${e.message}` };
-        return;
+          result.reqData = await buildFieldTree(reqData, MsgType, root);
+        } catch { result.reqData = null; }
+      } else if (reqInfo.protocol === 'json') {
+        result.reqData = reqData;
       }
+      result.reqProtocol = reqInfo.protocol;
+      result.reqMessageType = reqInfo.messageType;
     }
 
-    // Return patched/decoded data
-    if (rec.info.protocol === 'protobuf' && rec.decoded && rec.info.desc && rec.info.messageType) {
-      try {
-        const MsgType = await pbEngine.getMessageType(rec.info.desc, rec.info.messageType);
-        const root = MsgType.root as any;
-        const tree = await buildFieldTree(rec.decoded, MsgType, root);
-        ctx.body = { ...baseResponse, data: tree };
-      } catch (e: any) {
-        ctx.body = { ...baseResponse, error: `field tree build failed: ${e.message}` };
+    // Response data
+    if (rec.resInfo && (rec.resDecoded || original)) {
+      const resInfo = rec.resInfo;
+      const resData = original && rec.resOriginalRaw ? await tryDecode(resInfo, rec.resOriginalRaw) : rec.resDecoded;
+      if (resInfo.protocol === 'protobuf' && resData && resInfo.desc && resInfo.messageType) {
+        try {
+          const MsgType = await pbEngine.getMessageType(resInfo.desc, resInfo.messageType);
+          const root = MsgType.root as any;
+          result.resData = await buildFieldTree(resData, MsgType, root);
+        } catch { result.resData = null; }
+      } else if (resInfo.protocol === 'json') {
+        result.resData = resData;
       }
-    } else if (rec.info.protocol === 'json') {
-      ctx.body = { ...baseResponse, data: rec.decoded };
-    } else {
-      ctx.body = { ...baseResponse, error: rec.error || 'no decoded data' };
+      result.resProtocol = resInfo.protocol;
+      result.resMessageType = resInfo.messageType;
     }
+
+    ctx.body = result;
   });
+
+  async function tryDecode(info: any, raw: Buffer) {
+    if (info.protocol === 'protobuf' && info.desc && info.messageType) {
+      return await pbEngine.decode(info.desc, info.messageType, info.delimited, raw);
+    } else if (info.protocol === 'json') {
+      return JSON.parse(raw.toString('utf-8'));
+    }
+    return null;
+  }
 
   // --- decode-pb (for inspectorsTab) ---
   router.post('/cgi-bin/decode-pb', async (ctx) => {

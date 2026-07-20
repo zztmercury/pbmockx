@@ -1,10 +1,8 @@
 /**
  * FlowStore — LRU store for decoded sessions.
  *
- * Each record contains the decoded message object (or JSON object), the
- * original pre-patch data, protocol info, and patch errors.
- *
- * Replicates Python pbmockx_addon.py flow_store (lines 456-480).
+ * Each flow record holds BOTH request and response data (if available).
+ * reqRead and resRead use the same flow ID (whistle session ID) via upsert().
  */
 
 import type { DetectInfo } from './content-type';
@@ -14,12 +12,19 @@ export interface FlowRecord {
   url: string;
   method: string;
   status: number | null;
-  info: DetectInfo;
-  decoded: any;          // decoded message object or JSON object (patched, final)
-  originalRaw: Buffer | null;  // original raw bytes (for --original re-decode on demand)
+  // Request data (from reqRead)
   reqHeaders?: Record<string, string>;
+  reqInfo?: DetectInfo;
+  reqDecoded?: any;
+  reqOriginalRaw?: Buffer | null;
+  // Response data (from resRead)
   resHeaders?: Record<string, string>;
-  direction?: 'req' | 'res';  // req=reqRead flow, res=resRead flow
+  resInfo?: DetectInfo;
+  resDecoded?: any;
+  resOriginalRaw?: Buffer | null;
+  // Status flags
+  hasReq?: boolean;
+  hasRes?: boolean;
   error?: string;
   patchError?: string;
   ts: number;
@@ -29,23 +34,39 @@ const MAX_FLOWS = 500;
 
 export class FlowStore {
   private store = new Map<string, FlowRecord>();
-  private order: string[] = []; // LRU order
+  private order: string[] = [];
 
-  put(rec: FlowRecord): void {
-    this.store.set(rec.id, rec);
-    this.order.push(rec.id);
-    while (this.order.length > MAX_FLOWS) {
-      const old = this.order.shift()!;
-      this.store.delete(old);
+  /** Insert or update — merges request/response data into one record. */
+  upsert(id: string, patch: Partial<FlowRecord>): FlowRecord {
+    let rec = this.store.get(id);
+    if (rec) {
+      // Merge patch into existing record
+      Object.assign(rec, patch);
+      if (patch.reqDecoded !== undefined) rec.hasReq = true;
+      if (patch.resDecoded !== undefined || patch.resHeaders !== undefined) rec.hasRes = true;
+    } else {
+      rec = {
+        id,
+        url: patch.url || '',
+        method: patch.method || '',
+        status: null,
+        hasReq: patch.reqDecoded !== undefined,
+        hasRes: patch.resDecoded !== undefined || patch.resHeaders !== undefined,
+        ts: Date.now(),
+        ...patch,
+      };
+      this.store.set(id, rec);
+      this.order.push(id);
+      while (this.order.length > MAX_FLOWS) {
+        const old = this.order.shift()!;
+        this.store.delete(old);
+      }
     }
+    return rec;
   }
 
   find(idPrefix: string): FlowRecord | null {
-    // Exact match first
-    if (this.store.has(idPrefix)) {
-      return this.store.get(idPrefix)!;
-    }
-    // Prefix match
+    if (this.store.has(idPrefix)) return this.store.get(idPrefix)!;
     for (const [k, v] of this.store) {
       if (k.startsWith(idPrefix)) return v;
     }
@@ -53,11 +74,8 @@ export class FlowStore {
   }
 
   list(filterRe?: RegExp): FlowRecord[] {
-    const items = Array.from(this.store.values()).reverse(); // newest first
-    if (filterRe) {
-      return items.filter(r => filterRe.test(r.url));
-    }
-    return items;
+    const items = Array.from(this.store.values()).reverse();
+    return filterRe ? items.filter(r => filterRe.test(r.url)) : items;
   }
 
   clear(): void {

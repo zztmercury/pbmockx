@@ -234,12 +234,10 @@ async function cmd_flows(args) {
   const data = await _req('GET', '/cgi-bin/flows' + qs);
   printTable(data.map(r => ({
     id: r.id,
-    dir: r.direction === 'req' ? 'REQ' : 'RES',
     method: r.method,
     status: r.status || '',
-    protocol: r.protocol || '',
-    messageType: (r.messageType || '').slice(0, 40),
-    url: (r.url || '').slice(0, 60),
+    proto: [r.reqProto, r.resProto].filter(Boolean).join('/'),
+    url: (r.url || '').slice(0, 70),
   })));
 }
 
@@ -254,66 +252,38 @@ async function cmd_decode(args) {
   const qs = original ? '?original=1' : '';
   const data = await _req('GET', '/cgi-bin/flows/' + id + qs);
 
-  if (data.error && !data.data) { console.error('Error:', data.error); process.exit(1); }
+  if (data.error && !data.reqData && !data.resData) { console.error('Error:', data.error); process.exit(1); }
 
-  // resRead flow → show response; reqRead flow → show request
-  // --req: find matching reqRead flow; --res: find matching resRead flow
-  if (wantReq && data.direction === 'res') {
-    // Find the matching reqRead flow by URL
-    const baseUrl = data.url;
-    const allFlows = await _req('GET', '/cgi-bin/flows');
-    const reqFlow = allFlows.find(f => f.direction === 'req' && f.url.startsWith(baseUrl));
-    if (reqFlow) {
-      const reqData = await _req('GET', '/cgi-bin/flows/' + reqFlow.id + qs);
-      printSection('Request', reqData.method, reqData.url, reqData.reqHeaders, reqData, original);
-      return;
-    }
-    console.log('(no matching request flow)');
-    return;
-  }
-  if (wantRes && data.direction === 'req') {
-    const baseUrl = data.url.replace(' (request)$', '');
-    const allFlows = await _req('GET', '/cgi-bin/flows');
-    const resFlow = allFlows.find(f => f.direction === 'res' && baseUrl.includes(f.url));
-    if (resFlow) {
-      const resData = await _req('GET', '/cgi-bin/flows/' + resFlow.id + qs);
-      printSection('Response', 'HTTP ' + (resData.status || 200), resData.url, resData.resHeaders, resData, original);
-      return;
-    }
-    console.log('(no matching response flow)');
-    return;
-  }
+  const showReq = wantReq || (!wantRes && data.hasReq);
+  const showRes = wantRes || (!wantReq && data.hasRes);
 
-  // Default: show what's available
-  if (data.direction === 'req') {
-    printSection('Request', data.method, data.url, data.reqHeaders, data, original);
-  } else {
-    printSection('Response', 'HTTP ' + (data.status || 200), data.url, data.resHeaders, data, original);
+  if (showReq && (data.reqHeaders || data.reqData !== undefined)) {
+    printSection('Request', data.method, data.url, data.reqHeaders, data.reqProtocol, data.reqMessageType, data.reqData, original);
+    if (showRes) console.log('');
   }
-}
-
-function printSection(title, methodLine, url, headers, data, original) {
-  console.log('=== ' + title + ' ===');
-  console.log(methodLine + ' ' + (url || '').replace(' (request)$', ''));
-  if (headers) {
-    for (const [k, v] of Object.entries(headers)) {
-      console.log(k + ': ' + v);
-    }
-  }
-  console.log('');
-  if (data.data) {
-    const label = data.protocol === 'json' ? title + ' Body (JSON)' : title + ' Body (PB: ' + (data.messageType || '?') + ')';
-    console.log('=== ' + label + (original ? ' [original]' : '') + ' ===');
-    if (data.protocol === 'json') {
-      console.log(JSON.stringify(data.data, null, 2));
-    } else if (data.data && data.data.fields) {
-      try {
-        const { renderTree } = require('../dist/src/field-tree');
-        console.log(renderTree(data.data));
-      } catch { console.log(JSON.stringify(data.data, null, 2)); }
-    }
+  if (showRes && (data.resHeaders || data.resData !== undefined)) {
+    printSection('Response', 'HTTP ' + (data.status || 200), data.url, data.resHeaders, data.resProtocol, data.resMessageType, data.resData, original);
   }
   if (data.error) console.error('Error:', data.error);
+}
+
+function printSection(title, methodLine, url, headers, protocol, messageType, body, original) {
+  console.log('=== ' + title + ' ===');
+  console.log(methodLine + ' ' + (url || ''));
+  if (headers) {
+    for (const [k, v] of Object.entries(headers)) console.log(k + ': ' + v);
+  }
+  console.log('');
+  if (body) {
+    const label = protocol === 'json' ? title + ' Body (JSON)' : title + ' Body (PB: ' + (messageType || '?') + ')';
+    console.log('=== ' + label + (original ? ' [original]' : '') + ' ===');
+    if (protocol === 'json') {
+      console.log(JSON.stringify(body, null, 2));
+    } else if (body && body.fields) {
+      try { const { renderTree } = require('../dist/src/field-tree'); console.log(renderTree(body)); }
+      catch { console.log(JSON.stringify(body, null, 2)); }
+    }
+  }
 }
 
 async function cmd_rules(args) {

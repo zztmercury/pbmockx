@@ -27,9 +27,10 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/sc
 install.sh 会：
 1. 检查 Node.js >= 18
 2. 检查/安装 whistle（>= 2.9.100）
-3. 构建插件（tsc）+ 注册到 whistle
-4. npm link（让 `pbmockx` 短命令可用）
-5. 安装 SKILL.md 到 agent skill 目录
+3. 构建插件（tsc）
+4. npm link（让插件全局可用，`w2 start` 自动加载 + 注入 `rules.txt` 里的 `* pipe://pbmockx`）
+5. 重启 whistle 以加载插件 + rules.txt
+6. 安装 SKILL.md 到 agent skill 目录（`~/.agents/skills/` + `~/.claude/skills/`）
 
 ### 更新
 ```bash
@@ -42,10 +43,12 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/sc
 
 ## 启动
 ```bash
-w2 start -A whistle-plugin     # 本地开发：直接加载插件目录
-# 或（已通过 w2 install 安装）
-w2 start
+w2 start                                 # npm link 后插件全局可用，w2 自动加载（含 rules.txt）
+# 本地开发用 w2 start -A whistle-plugin 也可直接加载插件目录
 ```
+> 插件加载时通过 `whistle-plugin/rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，
+> 所有请求默认走 pipe（decode→patch→encode），无需手动在 whistle UI 写 pipe 规则。
+> 如需选择性 pipe，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则。
 
 ## CLI（AI agent 用）
 
@@ -80,9 +83,10 @@ w2 ca                                          # PC 证书
 
 # 工具维护
 pbmockx web                                    # 打开 whistle UI
-pbmockx doctor                                 # 全链路健康检查
+pbmockx doctor                                 # 全链路健康检查（含 npm link 状态）
+pbmockx fix                                    # 自动修复：rebuild→npm link→w2 restart→verify
 pbmockx agent-doc                              # 打印 SKILL.md
-pbmockx skill install                          # 安装 SKILL.md 到 agent 目录
+pbmockx skill install                          # 安装 SKILL.md 到 agent 目录（~/.agents + ~/.claude）
 pbmockx version [--check]                      # 版本 + 远程检查
 pbmockx connect-android [-s <serial>]          # Android 代理 + 证书
 
@@ -92,8 +96,7 @@ pbmockx <command> -h / --help                  # 各命令的详细帮助（flow
 ```
 
 ## 接入 agent
-- **opencode**：`pbmockx skill install` 自动装到 `~/.agents/skills/pbmockx/`
-- **Claude Code**：同上，自动检测 `~/.claude/skills/`
+- **opencode / Claude Code**：`pbmockx skill install` 自动装到 `~/.agents/skills/pbmockx/` 和 `~/.claude/skills/pbmockx/`
 - **其他 agent**：跑 `pbmockx agent-doc` 取使用说明注入 system prompt
 
 ## 文件
@@ -104,8 +107,9 @@ pbmockx <command> -h / --help                  # 各命令的详细帮助（flow
   - `src/uiServer/` — Koa CGI（规则 CRUD + flow 查询 + decode-pb）
   - `public/pb-req.html` / `pb-res.html` — PBView 子标签页（Request/Response 各一份，JS 内联无外部脚本），通过 whistleBridge 的 `addSessionActiveListener` + `getActiveSession` 拉取 session body
   - `bin/cli.js` — Node.js CLI（支持 `-h`/`--help`）
+  - `rules.txt` — 插件级规则（`* pipe://pbmockx`），加载插件时自动注入，全量 pipe 无需手写
 - `addon/pbmockx_addon.py` — mitmproxy 版本（保留作 fallback）
-- `scripts/install.sh` — 一键安装（Node.js + whistle + 插件）
+- `scripts/install.sh` — 一键安装（Node.js + whistle + 构建 + npm link + skill）；支持 `--update` / `--uninstall`
 - `scripts/start-mitmproxy.sh` — mitmproxy 启动（fallback）
 - `docs/SKILL.md` — agent 文档（与 CLI `agent-doc` 同源）
 - `rules.yaml.example` — 规则模板

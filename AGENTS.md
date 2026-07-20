@@ -24,7 +24,8 @@ pbmockx CLI（whistle-plugin/bin/cli.js）  ──HTTP──►  uiServer CGI（
 - **pipe hook 接收的 body 即 HTTP 请求 body**：resRead 里响应体通过 `req` stream 传入，**响应头在 `req.headers`**（`req.originalRes` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**）；reqRead 里请求头在 `req.headers`，请求体同样通过 `req` stream 传入。
 - **gzip/deflate/br 解压**：pipe hook 在 decode 前按 `content-encoding` 用 `zlib.gunzipSync`/`inflateSync`/`brotliDecompressSync` 解压。**返回 UNCOMPRESSED body（不重新压缩）**——whistle pipe（方案二）把它当 plaintext 处理，自动剥离 `content-encoding`，客户端和 Web UI 看到的都是原始字节。
 - `whistle-plugin/bin/cli.js` 是 CLI 入口（package.json 的 `"bin": {"pbmockx": "./bin/cli.js"}`）。`w2 exec pbmockx <cmd>` 或 npm link 后直接 `pbmockx <cmd>`。所有命令支持 `-h`/`--help`。
-- `scripts/install.sh` 检查 Node.js≥18 → 检查/安装 whistle → 构建插件（tsc）→ npm link → skill install。**不检查 lack**（dev-only 工具）。
+- **`whistle-plugin/rules.txt`** 是插件级规则文件（`* pipe://pbmockx`）——whistle 加载插件时自动注入，**无需用户在 Web UI 里手写 `pipe://pbmockx` 规则**。所有请求默认走 pipe（decode→patch→encode）；用户想选择性 pipe 时，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则覆盖。
+- `scripts/install.sh` 检查 Node.js≥18 → 检查/安装 whistle → 构建插件（tsc）→ `npm link`（让插件全局可用，`w2 start` 自动加载）→ 重启 whistle 加载插件 + rules.txt → skill install。`--uninstall` 反向清理：清旧 w2 add 规则 + `w2 uninstall` + `npm unlink -g` + `pbmockx skill uninstall` + 删除克隆仓库。**不检查 lack**（dev-only 工具）。
 - **Legacy fallback**：`scripts/start-mitmproxy.sh` + `addon/pbmockx_addon.py` 保留，用于无 Node.js 环境（Python mitmproxy addon，已停止主要迭代）。
 - **已删除的文件**（历史版本曾有）：`bin/pbmockx`（旧 Python CLI）、`scripts/start.sh`（旧 mitmproxy 启动脚本）、`whistle-plugin/public/pb-view.html` 和 `pb-view.js`（JS 已内联进 `pb-req.html`/`pb-res.html`）。
 
@@ -36,9 +37,8 @@ pbmockx CLI（whistle-plugin/bin/cli.js）  ──HTTP──►  uiServer CGI（
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh)"  # 远程一行
 
 # 启动
-w2 start -A whistle-plugin   # 本地开发：直接加载插件目录
-# 或（已通过 w2 install 安装）
-w2 start
+w2 start                                 # npm link 后插件全局可用，w2 自动加载（含 rules.txt）
+# 本地开发用 w2 start -A whistle-plugin 也可直接加载插件目录
 
 # CLI（pbmockx 命令，通过 npm link 或 w2 exec；所有命令支持 -h/--help）
 pbmockx flows [--filter <regex>]                          # 列出已 decode 的 flow
@@ -48,9 +48,10 @@ pbmockx map-local add|list|del ...                        # map_local 规则（-
 pbmockx map-remote add|list|del ...                       # map_remote 规则（--regex）
 pbmockx web                                                # 打开 whistle Web UI
 pbmockx connect-android [-s <serial>]                     # Android 代理 + 证书指引
-pbmockx doctor                                             # 全链路检查（node/whistle/plugin/version）
+pbmockx doctor                                             # 全链路检查（node/whistle/plugin/link/version）
+pbmockx fix                                                # 自动修复：rebuild→npm link→w2 restart→verify
 pbmockx agent-doc                                          # 打印 SKILL.md
-pbmockx skill install|list|uninstall                      # 安装 SKILL.md 到 agent 目录
+pbmockx skill install|list|uninstall                      # 安装 SKILL.md 到 agent 目录（~/.agents + ~/.claude）
 pbmockx version [--check]                                  # 版本（可选检查 GitHub release）
 w2 exec pbmockx <cmd>                                      # 未 npm link 时的替代调用
 
@@ -83,7 +84,7 @@ cd whistle-plugin && npx tsc --noEmit
 - **rules.yaml** 存储所有规则（js-yaml 读写）。启动时加载（`RuleEngine.reload`），add/del 时自动保存（`RuleEngine.save`）。`.gitignore` 排除 `rules.yaml`（运行时生成），仓库里有 `rules.yaml.example` 作为模板。
 - **map_local data** 的 mock 数据存在 `whistle-plugin/mock-data/<id>.json` 外部文件，规则里只存 `data_file` 引用。`.gitignore` 排除 `mock-data/`。
 - **规则 ID**：`crypto.randomBytes(4).toString('hex')`（8 字符 hex）。
-- **pipe 触发条件**：只有匹配 `pattern pipe://pbmockx` 的请求才会进入 resRead/reqRead。rulesServer 会自动注入 pipe 规则（对有 patch/map_local data 规则的 pattern）。
+- **pipe 触发条件**：只有匹配 `pattern pipe://pbmockx` 的请求才会进入 resRead/reqRead。插件加载时通过 `whistle-plugin/rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，无需用户手动配置；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。rulesServer 会对有 patch/map_local data 规则的 pattern 注入对应 pipe 规则。
 
 ## 关键陷阱
 
@@ -102,7 +103,7 @@ map_local(data) 需要 `desc`（.proto 描述符 base64 或文件路径）+ `mes
 Patch 不再走 dict→JSON→re-encode。直接在 `decodeDelimited` 返回的 message 对象上 `set_by_path`，再 `encodeDelimited`。`fromObject` 会做类型强转（字符串数字→number），但仍受 PB 类型约束（int64 不能传非数字字符串）。
 
 ### pipe 只对匹配 `pattern pipe://pbmockx` 的请求触发
-resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 pattern 生效**。rulesServer 会自动为有 patch/map_local(data) 规则的 pattern 注入 pipe 规则；手动测试时需在 whistle 规则里加 `pattern pipe://pbmockx`。未走 pipe 的请求，patch/map_local(data) 不生效（但 map_remote/map_local(file) 仍由 rulesServer 原生规则处理）。
+resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 pattern 生效**。插件加载时通过 `rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，所以默认所有请求都走 pipe；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。rulesServer 还会对有 patch/map_local(data) 规则的 pattern 注入对应 pipe 规则。未走 pipe 的请求，patch/map_local(data) 不生效（但 map_remote/map_local(file) 仍由 rulesServer 原生规则处理）。
 
 ### pipe hook 的头与 body 位置（容易踩坑）
 - **resRead**：响应头在 `req.headers`（`req.originalRes.headers` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**——别去 `req.originalRes.headers` 拿 content-type/encoding）。响应体通过 `req` stream 传入（pipe hook 把它当作 HTTP 请求 body 接收）。
