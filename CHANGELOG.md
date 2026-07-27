@@ -5,6 +5,18 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.4.1] - 2026-07-27
+
+### 修复
+- **skill install 路径错误**：旧版把 `SKILL.md` 文件 symlink 到 `~/.agents/skills/pbmockx`（无扩展名文件），导致 agent 期望的 `~/.agents/skills/pbmockx/SKILL.md` 路径不存在、读不到文档。改为 symlink 整个 `skill/` 目录到 agent skill 目录，`pbmockx/SKILL.md` 正确命中；未来加 `_assets/` 等资源文件也自动覆盖。
+- 移除 install 的 copy 兜底分支（symlink 失败直接报错，按需手动处理）。
+
+### 新增
+- **doctor 检测 skill 安装状态**：检查 `~/.agents/skills/pbmockx` 和 `~/.claude/skills/pbmockx`，区分 OK / BROKEN（symlink 断链）/ NOT INSTALLED / NOT SYMLINK，给出修复命令提示。
+
+### 变更
+- 文档目录迁移 `docs/SKILL.md` → `skill/SKILL.md`（独立 skill 目录，便于整体 symlink + 承载资源文件）。
+
 ## [0.4.0] - 2026-07-20
 
 ### 重大变更 — 迁移到 whistle 插件
