@@ -114,7 +114,7 @@ pbmockx <command> -h / --help                  # 各命令的详细帮助（flow
   - `bin/cli.js` — Node.js CLI（支持 `-h`/`--help`，`decode` 默认折叠模式 + `--path`/`--full`）
   - `rules.txt` — 插件级规则（`* pipe://pbmockx`），加载插件时自动注入，全量 pipe 无需手写
 - `scripts/install.sh` — 一键安装（Node.js + whistle + 构建 + npm link + skill）；支持 `--update` / `--uninstall`
-- `docs/SKILL.md` — agent 文档（与 CLI `agent-doc` 同源）
+  - `skill/SKILL.md` — agent 文档（与 CLI `agent-doc` 同源）；`skill/` 目录整体 symlink 到 agent 目录
 - `rules.yaml.example` — 规则模板
 - `tests/test_server.ts` + `test_pb-engine.ts` — 测试（100% Node.js）
 

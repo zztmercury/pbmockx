@@ -1,6 +1,6 @@
 # AGENTS.md — pbmockx 开发指南
 
-面向 Agent 的高信噪比上下文。用户使用指南在 `docs/SKILL.md`（`pbmockx help`/`agent-doc` 打印）——本文件只覆盖开发者关注点。
+面向 Agent 的高信噪比上下文。用户使用指南在 `skill/SKILL.md`（`pbmockx help`/`agent-doc` 打印）——本文件只覆盖开发者关注点。
 
 ## 架构
 
@@ -129,7 +129,7 @@ web 交互式断点难以设计，已移除。**一律用 patch 规则**实现�
 
 ## 约定
 
-- **`docs/SKILL.md` 是唯一真理来源**——`pbmockx help`/`agent-doc` 打印它。改动会传播给所有 agent。保持 frontmatter（`name`、`description` 及触发词）完整。
+- **`skill/SKILL.md` 是唯一真理来源**——`pbmockx help`/`agent-doc` 打印它。改动会传播给所有 agent。保持 frontmatter（`name`、`description` 及触发词）完整。
 - CLI 在 `whistle-plugin/bin/cli.js`（Node.js），通过 `w2 exec pbmockx` 或 npm link 后直接 `pbmockx` 调用。手写 argv 分发，`cmd_<verb>` 函数。**所有命令支持 `-h`/`--help`**。`decode <id>` 显示 headers + body，支持 `--req`/`--res`（只看请求或响应）/`--original`（pre-patch 原始数据）/`--path <path>`（导航到子树，折叠显示）/`--full`（完整展开）。**默认折叠模式**（v0.4.0 新默认）：顶层 scalar 显示值，嵌套 message 显示 `(type, N fields) ▸`，repeated 显示 `(repeated type, N items) ▸`，长字符串截断到 80 字符——适合 AI agent 节省 token。PB 输出用 `renderTree`（`field-tree.ts`）渲染成字段树。
 - **flow_store**（`src/flow-store.ts`）：**upsert by session ID**——同一个 whistle session ID（如 `1784529570691-003`）同时持有 request 和 response 数据（v0.4.0 合并了 REQ/RES 双 ID）。reqRead 上报时 upsert 到 `req` 字段，resRead 上报时 upsert 到 `res` 字段，**不创建新条目**。`flows` 列表每条请求一行（无 `dir` 列），`decode <id>` 同一 ID 同时显示 Request 和 Response（`--req`/`--res` 只过滤显示哪部分，不是找另一个 flow）。LRU 上限（满后淘汰最旧的）。
 - **`lack` 是 dev-only 工具**——不在 `install.sh` 里，不写入 dependencies。开发者自行安装用于 watch/reload。

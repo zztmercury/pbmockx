@@ -226,7 +226,7 @@ function readVersion() {
 }
 
 function readSkillDoc() {
-  const skillPath = path.join(PROJECT_ROOT, 'docs', 'SKILL.md');
+  const skillPath = path.join(PROJECT_ROOT, 'skill', 'SKILL.md');
   const content = fs.readFileSync(skillPath, 'utf-8');
   return content.replace(/^---[\s\S]*?---\n/, '');
 }
@@ -458,6 +458,27 @@ async function cmd_doctor(args) {
     console.log('npm link: NOT LINKED (run: pbmockx fix)');
     if (pluginOk) { /* plugin works but link is broken — pbmockx command might not work */ }
   }
+  // Check skill installation (symlink dir → <target>/SKILL.md)
+  const skillDir = path.join(PROJECT_ROOT, 'skill');
+  const skillTargets = [
+    path.join(require('os').homedir(), '.agents/skills/pbmockx'),
+    path.join(require('os').homedir(), '.claude/skills/pbmockx'),
+  ];
+  for (const t of skillTargets) {
+    const short = t.replace(require('os').homedir(), '~');
+    try {
+      const st = fs.lstatSync(t); // lstat: don't follow
+      if (!st.isSymbolicLink()) {
+        console.log('Skill ' + short + ': NOT SYMLINK (run: pbmockx skill install)');
+      } else if (fs.existsSync(t) && fs.existsSync(path.join(t, 'SKILL.md'))) {
+        console.log('Skill ' + short + ': OK -> ' + fs.readlinkSync(t));
+      } else {
+        console.log('Skill ' + short + ': BROKEN -> ' + fs.readlinkSync(t) + ' (run: pbmockx skill install)');
+      }
+    } catch {
+      console.log('Skill ' + short + ': NOT INSTALLED (run: pbmockx skill install)');
+    }
+  }
   console.log('pbmockx version:', readVersion());
 }
 
@@ -531,48 +552,53 @@ function cmd_agent_doc(args) {
 function cmd_skill(args) {
   const sub = args[0];
   if (hasHelp(args) || !sub) { helpSkill(); return; }
+  const home = require('os').homedir();
+  const skillDir = path.join(PROJECT_ROOT, 'skill');
+  const targets = [
+    path.join(home, '.agents/skills/pbmockx'),
+    path.join(home, '.claude/skills/pbmockx'),
+  ];
+  // remove a stale target (file, symlink, or real dir); no-op if absent
+  function cleanTarget(p) {
+    try {
+      const st = fs.lstatSync(p); // lstat: don't follow symlinks
+      if (st.isDirectory() && !st.isSymbolicLink()) fs.rmSync(p, { recursive: true, force: true });
+      else fs.unlinkSync(p);
+    } catch { /* not present */ }
+  }
   if (sub === 'install') {
-    const skillSrc = path.join(PROJECT_ROOT, 'docs', 'SKILL.md');
-    if (!fs.existsSync(skillSrc)) { console.error('SKILL.md not found at', skillSrc); process.exit(1); }
-    const targets = [
-      path.join(require('os').homedir(), '.agents/skills/pbmockx'),
-      path.join(require('os').homedir(), '.claude/skills/pbmockx'),
-    ];
+    if (!fs.existsSync(skillDir) || !fs.statSync(skillDir).isDirectory()) {
+      console.error('skill dir not found at', skillDir);
+      process.exit(1);
+    }
     for (const target of targets) {
-      const targetDir = path.dirname(target);
-      try { fs.mkdirSync(targetDir, { recursive: true }); } catch {}
+      try { fs.mkdirSync(path.dirname(target), { recursive: true }); } catch {}
+      cleanTarget(target);
       try {
-        if (fs.existsSync(target) || fs.existsSync(target + '.md')) {
-          fs.unlinkSync(fs.existsSync(target) ? target : target + '.md');
-        }
-        fs.symlinkSync(skillSrc, target);
-        console.log('Installed:', target);
+        fs.symlinkSync(skillDir, target); // symlink the whole dir → <target>/SKILL.md resolves
+        console.log('Installed:', target, '->', skillDir);
       } catch (e) {
-        try {
-          fs.copyFileSync(skillSrc, target + '.md');
-          console.log('Installed (copy):', target + '.md');
-        } catch (e2) { console.error('Failed:', target, e2.message); }
+        console.error('Failed:', target, e.message);
       }
     }
   } else if (sub === 'list') {
-    const home = require('os').homedir();
-    const dirs = ['.agents/skills', '.claude/skills'];
-    for (const d of dirs) {
-      const p = path.join(home, d, 'pbmockx');
-      if (fs.existsSync(p) || fs.existsSync(p + '.md')) {
-        console.log('Found:', p);
-      }
+    let found = false;
+    for (const p of targets) {
+      try {
+        const st = fs.lstatSync(p);
+        found = true;
+        if (st.isSymbolicLink()) {
+          console.log('Found:', p, '->', fs.readlinkSync(p));
+        } else {
+          console.log('Found (not symlink):', p);
+        }
+      } catch { /* not installed */ }
     }
+    if (!found) console.log('(none)');
   } else if (sub === 'uninstall') {
-    const home = require('os').homedir();
-    const targets = [
-      path.join(require('os').homedir(), '.agents/skills/pbmockx'),
-      path.join(require('os').homedir(), '.claude/skills/pbmockx'),
-    ];
-    for (const t of targets) {
-      for (const p of [t, t + '.md']) {
-        try { fs.unlinkSync(p); console.log('Removed:', p); } catch {}
-      }
+    for (const p of targets) {
+      cleanTarget(p);
+      try { console.log('Removed:', p); } catch {}
     }
   } else {
     helpSkill();
