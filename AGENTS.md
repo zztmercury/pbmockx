@@ -20,14 +20,14 @@ pbmockx CLI（whistle-plugin/bin/cli.js）  ──HTTP──►  uiServer CGI（
 - **whistle** 是宿主进程（默认 :8899），通过 `whistleConfig`（package.json）声明 `inspectorsTab`——只有 `req` 和 `res` 两个子 tab，都命名为 `"PBView"`，action 指向 `/public/pb-req.html` 与 `/public/pb-res.html`。**没有 `networkColumn`**（已按用户要求移除），也没有顶层 `name`/`action` 字段。
 - **whistle.pbmockx** 插件由 `whistle-plugin/index.js` 导出 6 个 hook（resRead/reqRead/resWrite/reqWrite/rulesServer/uiServer）。所有 hook 共享同一 Node 进程，模块级单例（`src/ctx.ts`）提供 `PBEngine`、`RuleEngine`、`FlowStore` 实例。
 - `whistle-plugin/src/*.ts` 编译到 `dist/src/`（tsc）。`index.js` 用 `require('./dist/src/<name>').default` 加载，try/catch 隔离单个 hook 失败。
-- `whistle-plugin/public/` 是 inspectorsTab 的 HTML——`pb-req.html` 与 `pb-res.html`，**JS 内联在 HTML 里**（whistle 不通过 HTTP 提供 public/ 静态文件，外部 `<script src>` 无法加载，只能走 inspectorsTab action 机制）。HTML 内通过 `whistleBridge` 拉取 session body，POST 到 `/cgi-bin/decode-pb` CGI 渲染字段树。
+- `whistle-plugin/public/` 是 inspectorsTab 的 HTML——`pb-req.html` 与 `pb-res.html`（薄 HTML）+ 共享 `pb-view.js`。两 HTML 仅差 `<title>` 与 `window.__PBMOCKX_MODE`（'req'/'res'），其余 CSS+JS 共享。**外部 JS 用相对路径加载**（`<script src="pb-view.js">`）——whistle 把 `/plugin.pbmockx/public/x` 请求剥前缀转发给插件 uiServer 的 `/public/:filename` 路由 serve（**不能用绝对路径 `/public/x`**，会落到 whistle webui 404）。HTML 内通过 `whistleBridge` 拉取 session body，POST 到 `/cgi-bin/decode-pb` CGI 渲染字段树。
 - **pipe hook 接收的 body 即 HTTP 请求 body**：resRead 里响应体通过 `req` stream 传入，**响应头在 `req.headers`**（`req.originalRes` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**）；reqRead 里请求头在 `req.headers`，请求体同样通过 `req` stream 传入。
 - **gzip/deflate/br 解压**：pipe hook 在 decode 前按 `content-encoding` 用 `zlib.gunzipSync`/`inflateSync`/`brotliDecompressSync` 解压。**返回 UNCOMPRESSED body（不重新压缩）**——whistle pipe（方案二）把它当 plaintext 处理，自动剥离 `content-encoding`，客户端和 Web UI 看到的都是原始字节。
 - **Any 展开/回包**（`src/any-expand.ts`）：patch 前对包含 `google.protobuf.Any` 字段的 message 调用 `expandAny`，按 `type_url` 在 root 里查类型、把 `value` bytes 解码为内层 message 对象（替换原 Any 字段为展开后的 message）；patch path 可直接导航到内层业务字段（如 `data.value.list[0].app.title`，`data` 是 Any，`value` 是内层 message）。patch 完成后调用 `packAny` 把展开的 message 重新编码为 bytes、包回 Any。**不修改 `@type` / `type_url`**。
 - `whistle-plugin/bin/cli.js` 是 CLI 入口（package.json 的 `"bin": {"pbmockx": "./bin/cli.js"}`）。`w2 exec pbmockx <cmd>` 或 npm link 后直接 `pbmockx <cmd>`。所有命令支持 `-h`/`--help`。
 - **`whistle-plugin/rules.txt`** 是插件级规则文件（`* pipe://pbmockx`）——whistle 加载插件时自动注入，**无需用户在 Web UI 里手写 `pipe://pbmockx` 规则**。所有请求默认走 pipe（decode→patch→encode）；用户想选择性 pipe 时，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则覆盖。
 - `scripts/install.sh` 检查 Node.js≥18 → 检查/安装 whistle → 构建插件（tsc）→ `npm link`（让插件全局可用，`w2 start` 自动加载）→ 重启 whistle 加载插件 + rules.txt → skill install。`--uninstall` 反向清理：清旧 w2 add 规则 + `w2 uninstall` + `npm unlink -g` + `pbmockx skill uninstall` + 删除克隆仓库。**不检查 lack**（dev-only 工具）。
-- **已删除的文件**（历史版本曾有）：`bin/pbmockx`（旧 Python CLI）、`scripts/start.sh`（旧 mitmproxy 启动脚本）、`addon/pbmockx_addon.py`（Python mitmproxy addon）、`scripts/start-mitmproxy.sh`（mitmproxy fallback 启动）、`whistle-plugin/public/pb-view.html` 和 `pb-view.js`（JS 已内联进 `pb-req.html`/`pb-res.html`）。
+- **已删除的文件**（历史版本曾有）：`bin/pbmockx`（旧 Python CLI）、`scripts/start.sh`（旧 mitmproxy 启动脚本）、`addon/pbmockx_addon.py`（Python mitmproxy addon）、`scripts/start-mitmproxy.sh`（mitmproxy fallback 启动）、`whistle-plugin/public/pb-view.html`（旧独立页面，已废弃）。注：`pb-view.js` 曾被内联进 HTML，后又拆出为共享外部 JS（见上条）。
 
 ## 命令
 
@@ -52,7 +52,7 @@ pbmockx rules add|list|del|save|reload ...               # patch 规则 CRUD（p
 pbmockx map-local add|list|del ...                        # map_local 规则（--data/--file）
 pbmockx map-remote add|list|del ...                       # map_remote 规则（--regex）
 pbmockx web                                                # 打开 whistle Web UI
-pbmockx connect-android [-s <serial>]                     # Android 代理 + 证书指引
+pbmockx connect-android [-s <serial>]                     # Android 代理配置 + 证书状态检测（system/user/not_installed/unknown）
 pbmockx doctor                                             # 全链路检查（node/whistle/plugin/link/version）
 pbmockx fix                                                # 自动修复：rebuild→npm link→w2 restart→verify
 pbmockx agent-doc                                          # 打印 SKILL.md
@@ -136,7 +136,7 @@ web 交互式断点难以设计，已移除。**一律用 patch 规则**实现�
 - **Node.js ≥ 18**（`install.sh` 强制）。protobufjs v7 + `ext/descriptor`（需要 Node 18+ 的 `URL`/`fetch` 支持）。
 - **TypeScript，不开 strict 模式**（`tsconfig.json` 未设 `"strict": true`）。源码在 `src/`，编译到 `dist/src/`；测试在 `tests/`，编译到 `dist/tests/`。
 - 运行时依赖：`protobufjs` + `long` + `js-yaml` + `koa` + `@koa/router` + `koa-bodyparser`。dev 依赖：`typescript` + `@types/*`。
-- **inspectorsTab 的 JS 内联在 HTML 里**——`whistle-plugin/public/pb-req.html` 和 `pb-res.html` 各自内联自己的 `<script>`。whistle 不通过 HTTP 提供 public/ 静态文件（只能走 inspectorsTab action 机制），所以外部 JS 文件无法 `<script src>` 加载。
+- **inspectorsTab 共享外部 JS**——`whistle-plugin/public/pb-view.js` 是共享逻辑，`pb-req.html`/`pb-res.html` 是薄 HTML（仅差 title + `window.__PBMOCKX_MODE`），用 `<script src="pb-view.js">` 相对路径引用。**必须相对路径**（不能用绝对 `/public/pb-view.js`，会落到 whistle webui 404）；请求 `/plugin.pbmockx/public/pb-view.js` 被 whistle 剥前缀转发给插件 uiServer 的 `/public/:filename` 路由 serve。`whistleBridge` 由 whistle 的 tab.html 模板同步注入，共享 JS 执行时已可用。uiServer 的 `PUBLIC_DIR` 必须指向 `whistle-plugin/public`（`dist/src/uiServer` 起 3 个 `..`）。
 - **whistleBridge API**：用 `bridge.addSessionActiveListener(handleSession)` 订阅 session 切换（不是 `bridge.on('sessionActive')`——那个 API 不存在；HTML 里有 fallback 但首选前者）。init 时还要调 `bridge.getActiveSession()` 处理当前已选中的 session。
 - **field-tree.ts**：`buildFieldTree` 是 **async**（因为要解码 `google.protobuf.Any` 的嵌套 message），需要传 `root` 参数以便按 `type_url` 查 Any 的内部类型。`renderTree` 输出格式：`name#N`（带字段号）、空字段显示 `(unset)`、enum 显示 `数字 (名字)`、bytes 显示 base64 截断 + 字节数、Any 显示 `Any → TypeName` 后展开嵌套字段。
 - **Legacy addon 已删除**：`addon/pbmockx_addon.py` 和 `scripts/start-mitmproxy.sh` 已移除，不再保留 Python fallback。

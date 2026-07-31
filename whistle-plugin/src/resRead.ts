@@ -5,7 +5,7 @@
  * In pipe resRead, response headers are in req.headers (not req.originalRes.headers).
  */
 
-import { detect, type DetectInfo } from './content-type';
+import { detect, parseForm, type DetectInfo } from './content-type';
 import { pbEngine, rules, flowStore } from './ctx';
 import { readBody, cloneData } from './helpers';
 import { expandAny, packAny } from './any-expand';
@@ -30,6 +30,20 @@ export default (server: any, options: any) => {
 
     const info: DetectInfo | null = detect(ct, decompressed);
     if (!info) { res.end(body); return; }
+
+    // Form (urlencoded) bodies: parse for display only, pass through unchanged (no patch).
+    if (info.protocol === 'form') {
+      let parsed: any = null;
+      try { parsed = parseForm(decompressed); }
+      catch (e: any) { console.error('[pbmockx] resRead form parse error ' + fullUrl + ':', e.message); }
+      flowStore.upsert(sessionId, {
+        url: fullUrl, method, status: statusCode,
+        resHeaders, resInfo: info, resDecoded: parsed, resOriginalRaw: decompressed,
+        ts: Date.now(),
+      });
+      res.end(body);
+      return;
+    }
 
     try {
       let decoded: any;

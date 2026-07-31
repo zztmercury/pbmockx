@@ -2,130 +2,82 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="color-scheme" content="light dark">
 <title>PBView - Response</title>
 <style>
+  :root {
+    --pb-bg: #fafafa;
+    --pb-text: #333;
+    --pb-muted: #999;
+    --pb-error: #c00;
+    --pb-border: #e8e8e8;
+    --pb-hover: #eef5ff;
+    --pb-toggle: #bbb;
+    --pb-field-name: #006;
+    --pb-field-number: #aaa;
+    --pb-field-type: #070;
+    --pb-value: #d00;
+    --pb-string: #a00;
+    --pb-number: #00a;
+    --pb-enum: #707;
+    --pb-bytes: #750;
+    --pb-unset: #bbb;
+    --pb-message-border: #eee;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --pb-bg: #1b1b1b;
+      --pb-text: #d4d4d4;
+      --pb-muted: #8a8a8a;
+      --pb-error: #ff6060;
+      --pb-border: #333;
+      --pb-hover: #1c2840;
+      --pb-toggle: #6a6a6a;
+      --pb-field-name: #6db4ff;
+      --pb-field-number: #7a7a7a;
+      --pb-field-type: #7eda7e;
+      --pb-value: #ff6060;
+      --pb-string: #ff7a7a;
+      --pb-number: #6db4ff;
+      --pb-enum: #d99cd9;
+      --pb-bytes: #d4a86a;
+      --pb-unset: #6a6a6a;
+      --pb-message-border: #2a2a2a;
+    }
+  }
+
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family:'SF Mono','Monaco','Menlo','Consolas',monospace; font-size:12px; background:#fafafa; color:#333; line-height:1.6; }
+  html { background:var(--pb-bg); min-height:100%; }
+  body { font-family:'SF Mono','Monaco','Menlo','Consolas',monospace; font-size:12px; background:var(--pb-bg); color:var(--pb-text); line-height:1.6; }
   #container { padding:6px 8px; }
-  .hint { color:#999; padding:12px; text-align:center; }
-  .error { color:#c00; padding:12px; }
+  .hint { color:var(--pb-muted); padding:12px; text-align:center; }
+  .error { color:var(--pb-error); padding:12px; }
   .tree-node { margin-left:0; }
-  .tree-children { margin-left:12px; border-left:1px solid #e8e8e8; padding-left:6px; }
+  .tree-children { margin-left:12px; border-left:1px solid var(--pb-border); padding-left:6px; }
   .field-row { padding:1px 0; cursor:default; white-space:nowrap; }
   .field-row.expandable { cursor:pointer; }
-  .field-row.expandable:hover { background:#eef5ff; }
-  .toggle { display:inline-block; width:12px; color:#bbb; user-select:none; }
-  .fname { color:#006; font-weight:500; }
-  .fnum { color:#aaa; font-size:10px; }
-  .ftype { color:#070; font-style:italic; font-size:11px; opacity:0.7; }
-  .fval { color:#d00; }
-  .fval.s { color:#a00; }
-  .fval.n { color:#00a; }
-  .fval.e { color:#707; }
-  .fval.b { color:#750; }
-  .unset { color:#bbb; font-style:italic; }
+  .field-row.expandable:hover { background:var(--pb-hover); }
+  .toggle { display:inline-block; width:12px; color:var(--pb-toggle); user-select:none; }
+  .fname { color:var(--pb-field-name); font-weight:500; }
+  .fnum { color:var(--pb-field-number); font-size:10px; }
+  .ftype { color:var(--pb-field-type); font-style:italic; font-size:11px; opacity:0.7; }
+  .fval { color:var(--pb-value); }
+  .fval.s { color:var(--pb-string); }
+  .fval.n { color:var(--pb-number); }
+  .fval.e { color:var(--pb-enum); }
+  .fval.b { color:var(--pb-bytes); }
+  .unset { color:var(--pb-unset); font-style:italic; }
   .collapsed>.tree-children { display:none; }
   .collapsed>.field-row .toggle::before { content:'▸'; }
   .expanded>.field-row .toggle::before { content:'▾'; }
-  .msg-hdr { font-weight:bold; padding:2px 0 3px; margin-bottom:3px; border-bottom:1px solid #eee; }
-  .loading { color:#999; padding:12px; }
+  .msg-hdr { font-weight:bold; padding:2px 0 3px; margin-bottom:3px; border-bottom:1px solid var(--pb-message-border); }
+  .loading { color:var(--pb-muted); padding:12px; }
 </style>
 </head>
 <body>
 <div id="container"><div class="hint" id="placeholder">Select a request to view Protobuf data</div></div>
 <script>window.__PBMOCKX_MODE='res';</script>
-<script>
-(function(){
-var mode=window.__PBMOCKX_MODE||'res',container=document.getElementById('container'),bridge=null;
-var pb=window.location.pathname.replace(/\/public\/.*$/,''); if(!pb)pb='';
-function H(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-function hint(m){container.innerHTML='<div class="hint">'+H(m)+'</div>';}
-function err(m){container.innerHTML='<div class="error">'+H(m)+'</div>';}
-function load(m){container.innerHTML='<div class="loading">'+H(m||'Decoding...')+'</div>';}
-
-function handle(session){
-  if(!session){hint('No session selected');return;}
-  var ds=mode==='req'?{b:session.req&&session.req.base64,h:session.req&&session.req.headers}:{b:session.res&&session.res.base64,h:session.res&&session.res.headers};
-  if(!ds){hint('No data');return;}
-  var ct=(ds.h&&(ds.h['content-type']||ds.h['Content-Type']))||'';
-  if(!/protobuf/i.test(ct)){hint(/json/i.test(ct)?'JSON — use the Body tab':'Not Protobuf ('+(ct||'none')+')');return;}
-  if(!ds.b){hint('No body');return;}
-  load('Decoding...');
-  var desc=(ct.match(/desc\s*=\s*"([^"]+)"/i)||ct.match(/desc\s*=\s*([^\s;]+)/i)||[])[1];
-  var mt=(ct.match(/messageType\s*=\s*"([^"]+)"/i)||ct.match(/messageType\s*=\s*([^\s;]+)/i)||[])[1];
-  fetch(pb+'/cgi-bin/decode-pb',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({base64:ds.b,desc:desc,messageType:mt,delimited:/delimited\s*=\s*true/i.test(ct),contentType:ct})})
-  .then(function(r){return r.json();})
-  .then(function(r){
-    if(r.error){err('Decode error: '+H(r.error));return;}
-    if(r.protocol==='json'){hint('JSON — use the Body tab');return;}
-    if(r.data){renderTree(r.data);}else{hint('No decoded data');}
-  }).catch(function(e){err('Request failed: '+e.message);});
-}
-
-function renderTree(tree){
-  container.innerHTML='';
-  if(Array.isArray(tree)){
-    for(var i=0;i<tree.length;i++){var h=document.createElement('div');h.className='msg-hdr';h.textContent=tree[i].messageType+' ['+i+']';container.appendChild(h);container.appendChild(renderNodes(tree[i].fields));}
-    return;
-  }
-  var h=document.createElement('div');h.className='msg-hdr';h.textContent=tree.messageType;container.appendChild(h);container.appendChild(renderNodes(tree.fields));
-}
-
-function renderNodes(fields){
-  var n=document.createElement('div');n.className='tree-node';
-  if(!fields||!fields.length)return n;
-  for(var i=0;i<fields.length;i++)n.appendChild(renderField(fields[i]));
-  return n;
-}
-
-function renderField(f){
-  var w=document.createElement('div');w.className='tree-node';
-  var row=document.createElement('div');row.className='field-row';
-  var hasChildren=(f.fields&&f.fields.length>0)||(f.items&&f.items.length>0);
-  if(hasChildren){row.classList.add('expandable');w.classList.add('collapsed');}
-  // Build: toggle name (type) = value
-  var html='<span class="toggle"></span>';
-  html+='<span class="fname">'+H(f.name)+(f.name.charAt(0)==='['?'':'<span class="fnum">#'+f.id+'</span>')+'</span> ';
-  var typeLabel=f.kind==='any'&&f.anyType?'Any → '+f.anyType:f.kind+(f.type?' '+f.type:'');
-  html+='<span class="ftype">('+H(typeLabel)+')</span>';
-  // Value
-  if(f.kind==='scalar'){
-    if(f.value==null||f.value===undefined){html+=' <span class="unset">(unset)</span>';}
-    else if(typeof f.value==='string'){html+=' <span class="fval s">= "'+H(f.value)+'"</span>';}
-    else{html+=' <span class="fval n">= '+f.value+'</span>';}
-  }else if(f.kind==='enum'){
-    if(f.rawValue==null||f.rawValue===undefined){html+=' <span class="unset">(unset)</span>';}
-    else{html+=' <span class="fval e">= '+f.rawValue+' ('+H(f.value)+')</span>';}
-  }else if(f.kind==='bytes'){
-    if(!f.value){html+=' <span class="unset">(unset)</span>';}
-    else{html+=' <span class="fval b">= '+H(f.value.slice(0,60))+' ('+(f.rawValue||0)+'B)</span>';}
-  }else if((f.kind==='message'||f.kind==='any')&&!hasChildren){
-    html+=' <span class="unset">(unset)</span>';
-  }else if(f.kind==='repeated'&&!hasChildren){
-    html+=' <span class="unset">[]</span>';
-  }
-  row.innerHTML=html;
-  w.appendChild(row);
-  if(hasChildren){
-    var ch=document.createElement('div');ch.className='tree-children';
-    if(f.fields)for(var i=0;i<f.fields.length;i++)ch.appendChild(renderField(f.fields[i]));
-    if(f.items)for(var i=0;i<f.items.length;i++)ch.appendChild(renderField(f.items[i]));
-    w.appendChild(ch);
-    row.onclick=function(e){e.stopPropagation();if(w.classList.contains('collapsed')){w.classList.remove('collapsed');w.classList.add('expanded');}else{w.classList.remove('expanded');w.classList.add('collapsed');}};
-  }
-  return w;
-}
-
-function initBridge(b){
-  bridge=b;
-  if(typeof b.addSessionActiveListener==='function')b.addSessionActiveListener(handle);
-  else if(typeof b.on==='function')b.on('sessionActive',handle);
-  if(typeof b.getActiveSession==='function'){try{var s=b.getActiveSession();if(s)handle(s);}catch(e){}}
-}
-if(window.whistleBridge){initBridge(window.whistleBridge);}
-else if(window.parent&&typeof window.parent.onWhistleInspectorCustomTabReady==='function'){window.parent.onWhistleInspectorCustomTabReady(initBridge,window);}
-else{hint('Waiting for whistle bridge...');setTimeout(function(){if(window.whistleBridge)initBridge(window.whistleBridge);else hint('Whistle bridge not available');},500);}
-})();
-</script>
+<script src="pb-view.js"></script>
 </body>
 </html>

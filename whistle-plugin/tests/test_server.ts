@@ -92,6 +92,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // POST endpoint for urlencoded body (E2E: reqRead form parsing)
+  if (req.method === 'POST' && req.url === '/api/form') {
+    req.on('data', () => {}); // drain
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ received: true }));
+    });
+    return;
+  }
+
   res.writeHead(404);
   res.end('not found');
 });

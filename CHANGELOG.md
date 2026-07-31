@@ -5,6 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] - 2026-07-31
+
+### 新增
+- **PBView 夜间模式**：CSS 变量化 + `prefers-color-scheme: dark` 自动跟随系统主题，`color-scheme` meta 适配原生控件；`html` 背景填满窗口（覆盖 whistle tab.html 注入的白色背景）。
+- **connect-android 证书检测**：运行时用 node-forge 计算 `subject_hash_old`（whistle CA 的 CN 含时间戳每台不同，不能硬编码），检测系统证书区（`/apex/com.android.conscrypt/cacerts` + `/system/etc/security/cacerts`，含 Magisk 注入）和用户证书区（`/data/misc/user/0/cacerts-added` + `/data/misc/keychain/cacerts-added`），输出状态 `system`/`user`/`not_found`/`unknown`。非 root 设备两区都可读。
+  - 防误导输出：明确区分 Step1（已执行 `[exec]`）vs Step2（只读检测），`unknown` 表示无法判定（权限拒绝/离线）绝不报"未安装"；`user` 状态警告 Android 7+ app 默认不信任用户证书（需 root/Magisk 装系统证书或 app 配 networkSecurityConfig）。
+  - 前置设备检查：不带 `-s` 时 `adb devices` 解析，0 设备 / >1 设备（含 offline）/ 单设备非 device 状态三种情况中断 + 正确提示。
+  - 代理生效验证：`settings get global http_proxy` 检测代理状态（ok/mismatch/unset）。
+- **Form 表单请求体解析**（`application/x-www-form-urlencoded`）：pipe hook 识别 form content-type，`parseForm` 用 `URLSearchParams` 解析（同名 key 合并数组），存入 flowStore 供展示，请求体原样透传不修改（不做 patch）。CLI `decode --req` 以 K=V 对齐渲染。不支持 multipart（whistle WebUI 自带 WebForms 展示）。
+
+### 变更
+- **PBView 重构为共享外部 JS**：`pb-req.html`/`pb-res.html`（174→82 行）+ 共享 `pb-view.js`（IIFE 原样提取），消除两文件 100% 重复的 CSS+JS。外部 JS 用相对路径 `<script src="pb-view.js">` 加载（whistle 把 `/plugin.pbmockx/public/x` 请求剥前缀转发给插件 uiServer 的 `/public/:filename` 路由 serve）。
+- **修复 PUBLIC_DIR 路径 bug**：`router.ts` `PUBLIC_DIR` 多算一层 `..`（4→3，指向 `whistle-plugin/public`），这是 AGENTS.md 误记"外部 JS 不能加载"的真实原因（非 whistle 机制限制）。
+- **新增 node-forge 依赖**：用于 Android 证书 subject hash 计算（纯 JS，与 openssl `subject_hash_old` 实测一致）。
+- **单测增强**：13→20 个（+form×3 / cert×3 / parseDevices×1），新增 cert 测试 fixture（`tests/fixtures/test-cert.pem`）。
+- **文档同步**：SKILL.md connect-android 措辞防误导（"不要假设证书未安装，用此命令检测"）；AGENTS.md 修正"外部 JS 无法加载"过时表述 + pb-view.js 重建 + connect-android 检测 + PUBLIC_DIR 说明。
+
 ## [0.4.1] - 2026-07-27
 
 ### 修复

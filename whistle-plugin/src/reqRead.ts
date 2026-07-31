@@ -3,7 +3,7 @@
  * Stores request data into flow_store (upsert — merges with response if exists).
  */
 
-import { detect, type DetectInfo } from './content-type';
+import { detect, parseForm, type DetectInfo } from './content-type';
 import { pbEngine, rules, flowStore } from './ctx';
 import { readBody, cloneData } from './helpers';
 import * as zlib from 'zlib';
@@ -26,6 +26,20 @@ export default (server: any, options: any) => {
 
     const info: DetectInfo | null = detect(ct, decompressed);
     if (!info) { res.end(body); return; }
+
+    // Form (urlencoded) bodies: parse for display only, pass through unchanged (no patch).
+    if (info.protocol === 'form') {
+      let parsed: any = null;
+      try { parsed = parseForm(decompressed); }
+      catch (e: any) { console.error('[pbmockx] reqRead form parse error ' + fullUrl + ':', e.message); }
+      flowStore.upsert(sessionId, {
+        url: fullUrl, method,
+        reqHeaders, reqInfo: info, reqDecoded: parsed, reqOriginalRaw: decompressed,
+        ts: Date.now(),
+      });
+      res.end(body);
+      return;
+    }
 
     try {
       let decoded: any;

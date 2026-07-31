@@ -10,11 +10,15 @@ import 'protobufjs/ext/descriptor';
 import { PBEngine, DescCache } from '../src/pb-engine';
 import { parsePath, setByPath, getByPath } from '../src/path-nav';
 import { MockRule, RuleEngine } from '../src/rules';
-import { isPb, isJson, parseCtParams, detect } from '../src/content-type';
+import { isPb, isJson, isForm, parseForm, parseCtParams, detect } from '../src/content-type';
 import { buildFieldTree, renderTree } from '../src/field-tree';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+
+// --- android cert (cli.js helpers, require'd for testing) ---
+const cli = require('../../bin/cli.js');
+const testCertPem = fs.readFileSync(path.join(__dirname, '..', '..', 'tests', 'fixtures', 'test-cert.pem'), 'utf8');
 
 // Build a demo.Person message type for testing
 function buildDemoPerson(): { MsgType: protobuf.Type; encode: (data: any) => Buffer; descBytes: Buffer } {
@@ -95,6 +99,39 @@ test('detect identifies PB and JSON', () => {
 
   const none = detect('text/html', Buffer.from('<html>'));
   assert.strictEqual(none, null);
+  return Promise.resolve();
+});
+
+test('isForm detects urlencoded content-type', () => {
+  assert.ok(isForm('application/x-www-form-urlencoded'));
+  assert.ok(isForm('application/x-www-form-urlencoded; charset=utf-8'));
+  assert.ok(!isForm('application/json'));
+  assert.ok(!isForm('multipart/form-data'));
+  assert.ok(!isForm('application/x-protobuf'));
+  assert.ok(!isForm(''));
+  return Promise.resolve();
+});
+
+test('parseForm parses urlencoded body', () => {
+  assert.deepStrictEqual(parseForm(Buffer.from('a=1&b=two')), { a: '1', b: 'two' });
+  assert.deepStrictEqual(parseForm(Buffer.from('a=1&a=2&a=3')), { a: ['1', '2', '3'] });
+  assert.deepStrictEqual(parseForm(Buffer.from('empty=')), { empty: '' });
+  assert.deepStrictEqual(parseForm(Buffer.from('name=hello+world&x=%2B')), { name: 'hello world', x: '+' });
+  assert.deepStrictEqual(parseForm(Buffer.from('')), {});
+  return Promise.resolve();
+});
+
+test('detect identifies form content-type', () => {
+  const formInfo = detect('application/x-www-form-urlencoded', Buffer.from('a=1'));
+  assert.strictEqual(formInfo!.protocol, 'form');
+  assert.strictEqual(formInfo!.delimited, false);
+  // urlencoded body not misdetected as JSON
+  const formInfo2 = detect('application/x-www-form-urlencoded', Buffer.from('a=1&b=2'));
+  assert.strictEqual(formInfo2!.protocol, 'form');
+  // PB/JSON priority unchanged
+  assert.strictEqual(detect('application/x-protobuf; desc="http://h/d.desc"; messageType="m.T"', Buffer.alloc(0))!.protocol, 'protobuf');
+  assert.strictEqual(detect('application/json', Buffer.from('{}'))!.protocol, 'json');
+  assert.strictEqual(detect('text/html', Buffer.from('<html>')), null);
   return Promise.resolve();
 });
 
@@ -274,6 +311,54 @@ test('RuleEngine save/reload round-trip', () => {
   assert.strictEqual(engine2.list().length, 2);
 
   fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+// --- android cert tests ---
+
+test('subjectHashOld matches openssl subject_hash_old', () => {
+  // fixture cert: openssl x509 -subject_hash_old = 64acf2b7
+  const hash = cli.subjectHashOld(testCertPem);
+  assert.strictEqual(hash, '64acf2b7');
+  assert.ok(/^[0-9a-f]{8}$/.test(hash), 'hash should be 8 hex chars');
+  return Promise.resolve();
+});
+
+test('classifyProxyState classifies proxy raw values', () => {
+  const exp = '127.0.0.1:8899';
+  assert.strictEqual(cli.classifyProxyState('127.0.0.1:8899', exp).state, 'ok');
+  assert.strictEqual(cli.classifyProxyState('10.0.0.1:8080', exp).state, 'mismatch');
+  assert.strictEqual(cli.classifyProxyState('null', exp).state, 'unset');
+  assert.strictEqual(cli.classifyProxyState(':0', exp).state, 'unset');
+  assert.strictEqual(cli.classifyProxyState('', exp).state, 'unset');
+  assert.strictEqual(cli.classifyProxyState('  127.0.0.1:8899  ', exp).state, 'ok');
+  return Promise.resolve();
+});
+
+test('classifyCertState classifies cert detection results', () => {
+  const F = { found: true, ok: true };
+  const NF = { found: false, ok: true };
+  const D = { found: false, ok: true, denied: true };
+  assert.strictEqual(cli.classifyCertState([F, NF], [NF]), 'system');
+  assert.strictEqual(cli.classifyCertState([NF], [F, NF]), 'user');
+  assert.strictEqual(cli.classifyCertState([NF], [NF]), 'not_found');
+  assert.strictEqual(cli.classifyCertState([D], [D]), 'unknown');
+  assert.strictEqual(cli.classifyCertState([F], [F]), 'system');
+  return Promise.resolve();
+});
+
+test('parseDevices parses adb devices output', () => {
+  // single device
+  assert.deepStrictEqual(cli.parseDevices('List of devices attached\n12345\tdevice\n'), [{ serial: '12345', state: 'device' }]);
+  // multiple devices
+  assert.deepStrictEqual(cli.parseDevices('List of devices attached\n12345\tdevice\n67890\tdevice\n'), [{ serial: '12345', state: 'device' }, { serial: '67890', state: 'device' }]);
+  // offline/unauthorized INCLUDED (with state) — needed to detect multi-device w/ offline
+  assert.deepStrictEqual(cli.parseDevices('List of devices attached\n111\toffline\n222\tunauthorized\n333\tdevice\n'), [{ serial: '111', state: 'offline' }, { serial: '222', state: 'unauthorized' }, { serial: '333', state: 'device' }]);
+  // single offline
+  assert.deepStrictEqual(cli.parseDevices('List of devices attached\n111\toffline\n'), [{ serial: '111', state: 'offline' }]);
+  // empty
+  assert.deepStrictEqual(cli.parseDevices('List of devices attached\n'), []);
+  assert.deepStrictEqual(cli.parseDevices(''), []);
   return Promise.resolve();
 });
 

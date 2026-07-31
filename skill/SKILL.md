@@ -45,7 +45,7 @@ w2 / 插件 / 规则 / 流量。解读结果：
 |---|---|---|
 | w2: NOT running | whistle 未启动 | 运行 `w2 start`（后台 daemon，非阻塞）。 |
 | plugin: NOT loaded / NOT REACHABLE | 插件未注册或 npm link 失效 | 运行 `pbmockx fix`（自动 rebuild → npm link → w2 restart → verify）。若仍未恢复，检查 `npm ls -g whistle.pbmockx`，必要时重新跑 `./scripts/install.sh`。 |
-| plugin: OK, traffic: NO traffic | 插件已加载但没有流量 | 代理/证书未就绪 或 应用空闲。让用户操作应用（打开页面/搜索）触发流量，然后重新检查。如果应用有活动后流量仍为 0 → 证书未安装或设备代理未设置（指引：PC 运行 `w2 ca` 安装 CA；Android 设备运行 `pbmockx connect-android` 配置代理）。 |
+| plugin: OK, traffic: NO traffic | 插件已加载但没有流量 | 代理/证书未就绪 或 应用空闲。让用户操作应用（打开页面/搜索）触发流量，然后重新检查。如果应用有活动后流量仍为 0 → 证书或代理未就绪：PC 运行 `w2 ca` 安装 CA；Android 运行 `pbmockx connect-android`（它会配置代理并检测证书安装状态：system/user/not_installed/unknown——**不要假设证书未安装，用此命令检测**）。 |
 | plugin: OK (flow_count=N>0) | 就绪 | 进入工作流 |
 | npm link: NOT LINKED | `pbmockx` 短命令不可用（插件本身可能正常） | 运行 `pbmockx fix` 重新 link；在修复前用 `w2 exec pbmockx <cmd>` 代替。 |
 
@@ -221,7 +221,7 @@ pbmockx rules list --type map_local
 ```
 w2 start / stop / restart / status    # whistle 进程管理（不是 pbmockx start/stop）
 w2 ca                                 # 安装 PC 根证书（打开证书页面）
-pbmockx connect-android [-s <serial>] # 配置 Android 设备代理（adb reverse + http_proxy）
+pbmockx connect-android [-s <serial>] # 配置 Android 代理 + 检测证书状态（adb reverse + http_proxy + cert 检测：system/user/not_installed/unknown）
 pbmockx web                           # 打开 whistle Web UI
 ```
 
@@ -345,7 +345,7 @@ body —— whistle 会自动处理 content-encoding（剥除响应头里的 `co
   若仍未恢复，重新跑 `./scripts/install.sh`；修复前可用 `w2 exec pbmockx <cmd>`
   作为替代调用。
 - **`flows` 一直为空 / `flow_count=0`**：见前置检查 —— 证书/代理/应用空闲。
-  PC: `w2 ca` 安装证书；Android: `pbmockx connect-android`。
+  PC: `w2 ca` 安装证书；Android: `pbmockx connect-android`（配置代理 + 检测证书状态——**不要假设证书未安装**，运行此命令查看实际状态：system/user/not_installed/unknown；user 表示已装为用户证书但 Android 7+ app 默认不信任，需 root/Magisk 装系统证书或 app 配 networkSecurityConfig）。
 - **patch 规则不生效**：默认 `* pipe://pbmockx` 由 `rules.txt` 自动注入，
   无需手写 pipe 规则。如果你在 whistle UI 里改过 Rules（覆盖了 `*` 规则），
   确认对应 pattern 仍指向 `pipe://pbmockx`（§4 末尾）。同时检查 `url_regex`

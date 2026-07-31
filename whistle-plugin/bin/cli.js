@@ -12,6 +12,7 @@
 const http = require('http');
 const https = require('https');
 const { execSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -57,6 +58,96 @@ function _parseValue(s) {
   catch { return s; }
 }
 
+// --- Android cert detection (node-forge) ---
+
+let _forge;
+function forge() { if (!_forge) _forge = require('node-forge'); return _forge; }
+
+/** Compute OpenSSL subject_hash_old (Android CA filename hash) from PEM. */
+function subjectHashOld(pem) {
+  const f = forge();
+  const cert = f.pki.certificateFromPem(pem);
+  const derBytes = f.asn1.toDer(f.pki.distinguishedNameToAsn1(cert.subject)).getBytes();
+  return crypto.createHash('md5').update(Buffer.from(derBytes, 'binary')).digest().readUInt32LE(0).toString(16).padStart(8, '0');
+}
+
+/** Fetch whistle rootCA PEM from main whistle port (not plugin base). */
+function fetchRootCa() {
+  return new Promise((resolve, reject) => {
+    const r = http.get({ hostname: HOST, port: WHISTLE_PORT, path: '/cgi-bin/rootca' }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+    });
+    r.on('error', reject);
+    r.setTimeout(10000, () => r.destroy(new Error('timeout fetching rootca')));
+  });
+}
+
+/** adb shell; returns {ok, out, denied, missing, err}. denied != not-installed. */
+function adbShell(serial, cmd) {
+  const full = (serial ? 'adb -s ' + serial + ' shell ' : 'adb shell ') + cmd;
+  try { return { ok: true, out: execSync(full, { stdio: 'pipe' }).toString().trim() }; }
+  catch (e) {
+    const msg = String((e.stderr || '').toString().trim() || e.message || '');
+    if (/No such file|does not exist/i.test(msg)) return { ok: true, out: '', missing: true };
+    if (/Permission denied|not permitted|opendir failed/i.test(msg)) return { ok: true, out: '', denied: true };
+    return { ok: false, err: msg };
+  }
+}
+
+/** Detect cert by subject hash on device. state: system|user|not_found|unknown. */
+function detectCert(serial, hash) {
+  const pat = hash + '.*';
+  const sysDirs = ['/apex/com.android.conscrypt/cacerts', '/system/etc/security/cacerts'];
+  const usrDirs = ['/data/misc/user/0/cacerts-added', '/data/misc/keychain/cacerts-added'];
+  const probe = (dir) => {
+    const r = adbShell(serial, "ls '" + dir + "/" + pat + "' 2>/dev/null");
+    return { dir, found: r.ok && /[0-9a-f]{8}\.[0-9]+/.test(r.out), denied: !!r.denied, ok: r.ok };
+  };
+  const system = sysDirs.map(probe);
+  const user = usrDirs.map(probe);
+  return { state: classifyCertState(system, user), system, user };
+}
+
+/** Classify cert state from probe results. Pure function. */
+function classifyCertState(system, user) {
+  const systemFound = system.some(d => d.found);
+  const userFound = user.some(d => d.found);
+  const allDenied = system.concat(user).every(d => !d.ok || d.denied);
+  if (systemFound) return 'system';
+  if (userFound) return 'user';
+  if (allDenied) return 'unknown';
+  return 'not_found';
+}
+
+/** Classify proxy state from raw adb output. Pure function. */
+function classifyProxyState(raw, expected) {
+  const v = (raw || '').trim();
+  if (!v || v === 'null' || v === ':0') return { state: 'unset', raw: v, expected };
+  return { state: v === expected ? 'ok' : 'mismatch', raw: v, expected };
+}
+
+/** Detect proxy state: ok|unset|mismatch|unknown. */
+function detectProxy(serial) {
+  const expected = '127.0.0.1:' + WHISTLE_PORT;
+  const r = adbShell(serial, 'settings get global http_proxy');
+  if (!r.ok) return { state: 'unknown', raw: r.err, expected };
+  return classifyProxyState(r.out, expected);
+}
+
+/** Parse `adb devices` output → array of {serial,state} (all states, incl offline/unauthorized). Pure function. */
+function parseDevices(out) {
+  return (out || '').split('\n').slice(1).map(l => l.trim()).filter(Boolean)
+    .map(l => { const p = l.split(/\s+/); return { serial: p[0], state: p[1] || '' }; });
+}
+
+/** List authorized adb devices. Returns null if adb unavailable. */
+function listDevices() {
+  try { return parseDevices(execSync('adb devices', { stdio: 'pipe' }).toString()); }
+  catch (e) { return null; }
+}
+
 // --- Help text ---
 
 function helpMain() {
@@ -77,7 +168,7 @@ Commands:
   map-remote list                 List map_remote rules
   map-remote del <id>             Delete map_remote rule
   web                             Open whistle Web UI
-  connect-android [-s <serial>]   Configure Android proxy + cert
+  connect-android [-s <serial>]   Configure Android proxy + detect cert status
   doctor                          Check w2 + plugin + rules health
   fix                             Auto-repair plugin (re-link + restart)
   agent-doc                       Print SKILL.md
@@ -188,7 +279,7 @@ Options:
 }
 
 function helpWeb() { console.log(`Usage: pbmockx web\n\nOpen whistle Web UI in browser.`); }
-function helpConnectAndroid() { console.log(`Usage: pbmockx connect-android [-s <serial>]\n\nConfigure Android device proxy + cert.`); }
+function helpConnectAndroid() { console.log(`Usage: pbmockx connect-android [-s <serial>]\n\nConfigure Android device proxy and detect whistle rootCA install\nstatus (system / user / not_installed / unknown).\n\nStep 1 configures proxy (executed). Step 2 detects cert install status\n(read-only checks) — does NOT install or modify certs.`); }
 function helpDoctor() { console.log(`Usage: pbmockx doctor\n\nCheck w2 + plugin + rules health.\n\nIf plugin is not reachable, run 'pbmockx fix' to auto-repair.`); }
 function helpFix() { console.log(`Usage: pbmockx fix\n\nAuto-repair plugin installation:\n  1. Rebuild (npm install + tsc) if needed\n  2. Re-link (npm link) if unlinked\n  3. Restart whistle to reload plugin + rules.txt\n\nUse when plugin was uninstalled from Web UI or npm link broke.`); }
 function helpAgentDoc() { console.log(`Usage: pbmockx agent-doc\n\nPrint SKILL.md content.`); }
@@ -285,10 +376,23 @@ function printSection(title, methodLine, url, headers, protocol, messageType, bo
   }
   console.log('');
   if (body) {
-    const label = protocol === 'json' ? title + ' Body (JSON)' : title + ' Body (PB: ' + (messageType || '?') + ')';
+    let label;
+    if (protocol === 'json') label = title + ' Body (JSON)';
+    else if (protocol === 'form') label = title + ' Body (Form)';
+    else label = title + ' Body (PB: ' + (messageType || '?') + ')';
     console.log('=== ' + label + (original ? ' [original]' : '') + ' ===');
     if (protocol === 'json') {
       console.log(JSON.stringify(body, null, 2));
+    } else if (protocol === 'form') {
+      const entries = Object.entries(body);
+      if (!entries.length) {
+        console.log('(empty)');
+      } else {
+        const maxKey = Math.max(...entries.map(e => e[0].length));
+        for (const [k, v] of entries) {
+          console.log(k + ' '.repeat(Math.max(2, maxKey - k.length + 2)) + '= ' + (Array.isArray(v) ? v.join(', ') : String(v)));
+        }
+      }
     } else if (body && body.fields) {
       try {
         if (fullExpand) {
@@ -413,24 +517,89 @@ function cmd_web(args) {
   }
 }
 
-function cmd_connect_android(args) {
+async function cmd_connect_android(args) {
   if (hasHelp(args)) { helpConnectAndroid(); return; }
   const serialIdx = args.indexOf('-s');
   const serial = serialIdx >= 0 ? args[serialIdx + 1] : null;
-  const adb = (cmd) => {
-    const full = serial ? 'adb -s ' + serial + ' ' + cmd : 'adb ' + cmd;
-    console.log('$', full);
-    try { return execSync(full, { stdio: 'pipe' }).toString().trim(); }
-    catch (e) { console.error('adb failed:', e.message); return null; }
-  };
   const port = WHISTLE_PORT;
-  console.log('Setting up Android proxy to 127.0.0.1:' + port + '...');
-  adb('reverse tcp:' + port + ' tcp:' + port);
-  adb('shell settings put global http_proxy 127.0.0.1:' + port);
-  console.log('\nTo install whistle root CA on Android:');
-  console.log('  1. Download: http://127.0.0.1:' + port + '/cgi-bin/rootca');
-  console.log('  2. adb push rootCA.crt /sdcard/');
-  console.log('  3. Settings > Security > Install from storage');
+
+  // Pre-flight device check: abort early if adb unusable or multiple devices without -s
+  if (!serial) {
+    const devices = listDevices();
+    if (devices === null) {
+      console.error('Error: adb not available. Install platform-tools and ensure adb is in PATH.');
+      process.exit(1);
+    }
+    if (devices.length === 0) {
+      console.error('Error: no adb device connected. Connect a device with USB debugging on.');
+      process.exit(1);
+    }
+    if (devices.length > 1) {
+      console.error('Error: ' + devices.length + ' adb devices connected — specify one with -s <serial>.');
+      console.error('Available devices:');
+      for (const d of devices) console.error('  ' + d.serial + ' (' + d.state + ')');
+      process.exit(1);
+    }
+    // single device but not ready (offline/unauthorized)
+    if (devices[0].state !== 'device') {
+      console.error('Error: device ' + devices[0].serial + ' is ' + devices[0].state + ' (not ready).');
+      console.error('Authorize the RSA fingerprint on the device, or reconnect and retry.');
+      process.exit(1);
+    }
+  }
+
+  function adbExec(cmd) {
+    const full = (serial ? 'adb -s ' + serial + ' ' : 'adb ') + cmd;
+    console.log('[exec] ' + full);
+    try { execSync(full, { stdio: 'pipe' }); return true; }
+    catch (e) { console.error('  failed: ' + String(e.message).split('\n')[0]); return false; }
+  }
+
+  // Step 1: configure proxy (executed by this command)
+  console.log('=== Step 1: Configure proxy (executed) ===');
+  adbExec('reverse tcp:' + port + ' tcp:' + port);
+  adbExec('shell settings put global http_proxy 127.0.0.1:' + port);
+
+  // Step 2: detect status (read-only checks — does NOT install/modify certs)
+  console.log('\n=== Step 2: Detect status (read-only) ===');
+
+  const proxy = detectProxy(serial);
+  console.log('Proxy: ' + proxy.state + (proxy.raw ? ' [' + proxy.raw + ']' : '') + (proxy.state === 'mismatch' ? ' (expected ' + proxy.expected + ')' : ''));
+
+  let certState = 'unknown';
+  try {
+    const pem = await fetchRootCa();
+    const hash = subjectHashOld(pem);
+    console.log('RootCA hash: ' + hash);
+    const cert = detectCert(serial, hash);
+    certState = cert.state;
+    const sysHit = cert.system.find(d => d.found);
+    const usrHit = cert.user.find(d => d.found);
+    console.log('Cert (system): ' + (sysHit ? 'found @ ' + sysHit.dir : 'not found'));
+    console.log('Cert (user):   ' + (usrHit ? 'found @ ' + usrHit.dir : 'not found'));
+    console.log('Cert status:   ' + certState);
+  } catch (e) {
+    console.log('Cert status:   unknown (rootCA fetch/compute failed: ' + e.message + ')');
+  }
+
+  if (certState === 'user') {
+    console.log('\n  WARNING: installed as USER certificate.');
+    console.log('  Android 7+ apps (targetSdk>=24) do NOT trust user certs by default.');
+    console.log('  HTTPS capture may fail unless the app trusts user certs');
+    console.log('  (networkSecurityConfig) or the cert is installed as a SYSTEM');
+    console.log('  cert (root / emulator / Magisk module).');
+  } else if (certState === 'not_found') {
+    console.log('\n  Manual steps to install (NOT executed by this command):');
+    console.log('  1. Download: http://127.0.0.1:' + port + '/cgi-bin/rootca');
+    console.log('  2. adb push rootCA.crt /sdcard/');
+    console.log('  3. Settings > Security > Install from storage');
+    console.log('  Re-run: pbmockx connect-android' + (serial ? ' -s ' + serial : '') + '  (after install, to verify)');
+  } else if (certState === 'unknown') {
+    console.log('\n  Cannot determine cert status (permission denied or device offline).');
+    console.log('  Verify manually: Settings > Security > Encryption & credentials > Trusted credentials');
+  } else if (certState === 'system') {
+    console.log('\n  Cert installed as SYSTEM certificate — apps should trust it.');
+  }
 }
 
 async function cmd_doctor(args) {
@@ -644,7 +813,7 @@ async function main() {
       case 'map-local': await cmd_map_local(args); break;
       case 'map-remote': await cmd_map_remote(args); break;
       case 'web': cmd_web(args); break;
-      case 'connect-android': cmd_connect_android(args); break;
+      case 'connect-android': await cmd_connect_android(args); break;
       case 'doctor': await cmd_doctor(args); break;
       case 'fix': await cmd_fix(args); break;
       case 'agent-doc': cmd_agent_doc(args); break;
@@ -661,4 +830,6 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { subjectHashOld, classifyProxyState, classifyCertState, parseDevices };

@@ -19,7 +19,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { pbEngine, rules, flowStore, MOCK_DATA_DIR } from '../ctx';
-import { detect } from '../content-type';
+import { detect, parseForm } from '../content-type';
 import { buildFieldTree, renderTree, type MessageTree } from '../field-tree';
 import { MockRule } from '../rules';
 
@@ -28,7 +28,7 @@ declare module 'koa' {
   interface Request { body: any; }
 }
 
-const PUBLIC_DIR = path.join(__dirname, '..', '..', '..', '..', 'public');
+const PUBLIC_DIR = path.join(__dirname, '..', '..', '..', 'public');
 
 export default function setupRouter(router: Router) {
   // --- static files from public/ (for inspectorsTab resources) ---
@@ -92,7 +92,7 @@ export default function setupRouter(router: Router) {
           const root = MsgType.root as any;
           result.reqData = await buildFieldTree(reqData, MsgType, root);
         } catch { result.reqData = null; }
-      } else if (reqInfo.protocol === 'json') {
+      } else if (reqInfo.protocol === 'json' || reqInfo.protocol === 'form') {
         result.reqData = reqData;
       }
       result.reqProtocol = reqInfo.protocol;
@@ -109,7 +109,7 @@ export default function setupRouter(router: Router) {
           const root = MsgType.root as any;
           result.resData = await buildFieldTree(resData, MsgType, root);
         } catch { result.resData = null; }
-      } else if (resInfo.protocol === 'json') {
+      } else if (resInfo.protocol === 'json' || resInfo.protocol === 'form') {
         result.resData = resData;
       }
       result.resProtocol = resInfo.protocol;
@@ -124,6 +124,8 @@ export default function setupRouter(router: Router) {
       return await pbEngine.decode(info.desc, info.messageType, info.delimited, raw);
     } else if (info.protocol === 'json') {
       return JSON.parse(raw.toString('utf-8'));
+    } else if (info.protocol === 'form') {
+      return parseForm(raw);
     }
     return null;
   }

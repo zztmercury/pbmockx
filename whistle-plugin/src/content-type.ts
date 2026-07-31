@@ -5,6 +5,7 @@
  */
 
 const PB_CT_RE = /application\/x-(google-)?protobuf/i;
+const FORM_CT_RE = /application\/x-www-form-urlencoded/i;
 
 const DESC_RE = /desc\s*=\s*"([^"]+)"/i;
 const DESC_RE_BARE = /desc\s*=\s*([^\s;]+)/i;
@@ -44,7 +45,25 @@ export function isJson(ct: string, data: Buffer): boolean {
   }
 }
 
-export type Protocol = 'protobuf' | 'json';
+export function isForm(ct: string): boolean {
+  return !!ct && FORM_CT_RE.test(ct);
+}
+
+/** Parse urlencoded body into an object. Repeated keys collapse to an array. */
+export function parseForm(data: Buffer): Record<string, any> {
+  const params = new URLSearchParams(data.toString('utf-8'));
+  const obj: Record<string, any> = {};
+  const seen = new Set<string>();
+  for (const [k] of params) {
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const vals = params.getAll(k);
+    obj[k] = vals.length > 1 ? vals : vals[0];
+  }
+  return obj;
+}
+
+export type Protocol = 'protobuf' | 'json' | 'form';
 
 export interface DetectInfo {
   protocol: Protocol;
@@ -53,13 +72,16 @@ export interface DetectInfo {
   delimited: boolean;
 }
 
-/** Detect protocol from content-type + body. Returns null if not PB/JSON. */
+/** Detect protocol from content-type + body. Returns null if not PB/JSON/Form. */
 export function detect(
   ct: string,
   data: Buffer
 ): DetectInfo | null {
   if (isPb(ct)) {
     return { protocol: 'protobuf', ...parseCtParams(ct) };
+  }
+  if (isForm(ct)) {
+    return { protocol: 'form', delimited: false };
   }
   if (isJson(ct, data)) {
     return { protocol: 'json', delimited: false };

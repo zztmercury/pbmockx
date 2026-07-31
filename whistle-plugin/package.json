@@ -1,6 +1,6 @@
 {
   "name": "whistle.pbmockx",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Protobuf & JSON mock plugin for whistle — decode/patch/encode with field-tree viewer",
   "license": "MIT",
   "repository": {
@@ -21,7 +21,8 @@
     "js-yaml": "^4.0.0",
     "koa": "^2.14.0",
     "@koa/router": "^13.0.0",
-    "koa-bodyparser": "^4.4.0"
+    "koa-bodyparser": "^4.4.0",
+    "node-forge": "^1.4.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0",
