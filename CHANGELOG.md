@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.1] - 2026-08-18
+
+### 修复
+- **请求篡改导致签名失效（400）**：pipe hook 之前无条件对请求/响应体做 decode→encode 往返，即使没有任何 mock 规则。往返会丢弃未知字段、改变字段顺序，字节级改动破坏依赖原始字节的请求签名（如 `X-Tap-Sign`），导致服务端 400。现在无 patch/map_local(data) 规则时透传原始字节，decode 仅用于展示。
+- **POST 请求偶发超时**：无规则时仍会同步 `await decode`，而 decode 触发 `.desc` 下载（多 MB），阻塞请求/响应体转发，导致上游等 body 超时（POST 有 body 超时、GET 正常）。现在无规则时先 `res.end(body)` 立即转发，decode 移到异步（仅用于展示）。
+
+### 新增
+- **`.desc` 磁盘缓存**：`DescCache` 加内存 + 磁盘（`~/.pbmockx/desc-cache/`）缓存，300s TTL。TTL 内零网络；过期后用条件请求（`If-Modified-Since`/`If-None-Match`）判断变更（304 复用、200 更新），网络失败兜底返回陈旧字节。跨 `w2 restart` 持久，避免冷启动重新下载多 MB 描述符。`PBEngine.getRoot` 在 desc 未变更时复用已编译的 Root。
+- **`scripts/patch-whistle.sh`**：workaround whistle ≥ 2.10.8 的前端回归（自定义 inspector tab 被 `display:none` 隐藏）。按版本判断是否应用，幂等（已补丁跳过）、备份原 bundle、上游已修复时自动跳过。`install.sh` 和 `pbmockx fix` 已集成自动执行。
+
 ## [0.5.0] - 2026-07-31
 
 ### 新增
