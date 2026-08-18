@@ -670,7 +670,7 @@ async function cmd_fix(args) {
   }
 
   // Step 2: Re-link npm
-  console.log('[2/3] Re-linking npm...');
+  console.log('[2/4] Re-linking npm...');
   try {
     execSync('npm link', { cwd: pluginDir, stdio: 'pipe' });
     console.log('  ✓ npm link OK');
@@ -679,8 +679,21 @@ async function cmd_fix(args) {
     process.exit(1);
   }
 
-  // Step 3: Restart whistle
-  console.log('[3/3] Restarting whistle...');
+  // Step 3: Patch whistle frontend (custom inspector-tab hidden bug, >= 2.10.8)
+  console.log('[3/4] Checking whistle frontend patch...');
+  const patchScript = path.join(PROJECT_ROOT, 'scripts', 'patch-whistle.sh');
+  if (fs.existsSync(patchScript)) {
+    try {
+      execSync('bash ' + patchScript, { stdio: 'inherit' });
+    } catch (e) {
+      console.error('  ✗ whistle patch failed (non-fatal):', e.message);
+    }
+  } else {
+    console.log('  - patch-whistle.sh not found, skip');
+  }
+
+  // Step 4: Restart whistle
+  console.log('[4/4] Restarting whistle...');
   try {
     execSync('w2 restart', { stdio: 'pipe' });
     console.log('  ✓ whistle restarted');

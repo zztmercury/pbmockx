@@ -168,7 +168,15 @@ else
     warn "pbmockx not in PATH. Use: w2 exec pbmockx <command>"
 fi
 
-# --- Step 6: Restart whistle to load plugin + rules.txt ---
+# --- Step 6: Patch whistle frontend (custom inspector-tab hidden bug, >= 2.10.8) ---
+info "Checking whistle frontend patch..."
+if [ -f "$PROJECT_ROOT/scripts/patch-whistle.sh" ]; then
+    bash "$PROJECT_ROOT/scripts/patch-whistle.sh" || warn "whistle patch failed (non-fatal)"
+else
+    warn "patch-whistle.sh not found, skipping"
+fi
+
+# --- Step 7: Restart whistle to load plugin + rules.txt ---
 if w2 status 2>/dev/null | grep -q "running"; then
     info "Restarting whistle to load plugin..."
     w2 restart 2>/dev/null && ok "whistle restarted" || warn "Restart failed. Run: w2 restart"
