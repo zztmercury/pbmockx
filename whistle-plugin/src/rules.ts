@@ -219,6 +219,18 @@ export class RuleEngine {
     return result;
   }
 
+  /**
+   * Whether any patch / map_local(data) rule matches this URL — i.e. rules
+   * that modify the body inside the pipe hook. map_remote / map_local(file)
+   * are handled by rulesServer (whistle native rules), not in the pipe, so
+   * they do not require a decode→encode round-trip.
+   */
+  hasDataRules(url: string, protocol?: Protocol): boolean {
+    return this.matched(url, protocol).some(r =>
+      r.type === 'patch' || (r.type === 'map_local' && r.source === 'data')
+    );
+  }
+
   save(): boolean {
     try {
       // Preserve header comments
