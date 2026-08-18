@@ -15,6 +15,7 @@
 import protobuf from 'protobufjs';
 import 'protobufjs/ext/descriptor';
 import Long from 'long';
+import type { DescResult } from './desc-cache';
 
 // protobufjs needs Long for int64 support
 protobuf.util.Long = Long as any;
@@ -75,17 +76,19 @@ function getProtojsDir(): string | null {
 
 export class PBEngine {
   private rootCache = new Map<string, protobuf.Root>();
-  private descCache: { get: (url: string) => Promise<Buffer> };
+  private descCache: { get: (url: string) => Promise<DescResult> };
 
-  constructor(descCache?: { get: (url: string) => Promise<Buffer> }) {
+  constructor(descCache?: { get: (url: string) => Promise<DescResult> }) {
     this.descCache = descCache || new DescCacheShim();
   }
 
   private async getRoot(descUrl: string): Promise<protobuf.Root> {
+    // Every call issues a conditional request (If-Modified-Since/If-None-Match).
+    // 304 → reuse the compiled Root; 200 + changed bytes → rebuild.
+    const { bytes: descBytes, changed } = await this.descCache.get(descUrl);
     const cached = this.rootCache.get(descUrl);
-    if (cached) return cached;
+    if (cached && !changed) return cached;
 
-    const descBytes = await this.descCache.get(descUrl);
     const root = (protobuf.Root as any).fromDescriptor(descBytes, { keepCase: true });
 
     // Inject well-known type definitions that .desc may reference but not include
@@ -190,7 +193,7 @@ export class PBEngine {
 
 // Default shim if no DescCache provided
 class DescCacheShim {
-  async get(url: string): Promise<Buffer> {
+  async get(url: string): Promise<DescResult> {
     throw new Error('DescCacheShim does not support raw .desc URLs; provide a DescCache instance');
   }
 }

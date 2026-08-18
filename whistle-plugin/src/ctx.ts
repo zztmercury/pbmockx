@@ -6,6 +6,7 @@
  */
 
 import * as path from 'path';
+import * as os from 'os';
 import { PBEngine, DescCache } from './pb-engine';
 import { RuleEngine } from './rules';
 import { FlowStore } from './flow-store';
@@ -14,8 +15,10 @@ import { FlowStore } from './flow-store';
 const PLUGIN_ROOT = path.join(__dirname, '..', '..');
 const RULES_FILE = path.join(PLUGIN_ROOT, 'rules.yaml');
 const MOCK_DATA_DIR = path.join(PLUGIN_ROOT, 'mock-data');
+// Desc disk cache — persists across w2 restart, avoids re-downloading multi-MB .desc
+const DESC_CACHE_DIR = path.join(os.homedir(), '.pbmockx', 'desc-cache');
 
-const descCache = new DescCache();
+const descCache = new DescCache(DESC_CACHE_DIR);
 const pbEngine = new PBEngine(descCache);
 const rules = new RuleEngine(RULES_FILE, MOCK_DATA_DIR);
 const flowStore = new FlowStore();

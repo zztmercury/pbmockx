@@ -160,7 +160,7 @@ test('PBEngine decode/encode round-trip', async () => {
 
   // Create a mock DescCache that returns our descBytes
   const mockCache = {
-    get: async (url: string) => descBytes,
+    get: async (url: string) => ({ bytes: descBytes, changed: true }),
   };
   const engine = new PBEngine(mockCache as any);
 
@@ -180,7 +180,7 @@ test('PBEngine decode/encode round-trip', async () => {
 
 test('PBEngine delimited encode/decode', async () => {
   const demo = buildDemoPerson();
-  const mockCache = { get: async () => demo.descBytes };
+  const mockCache = { get: async () => ({ bytes: demo.descBytes, changed: true }) };
   const engine = new PBEngine(mockCache as any);
 
   const descUrl = 'test://demo.desc';
@@ -203,7 +203,7 @@ test('PBEngine delimited encode/decode', async () => {
 
 test('buildFieldTree builds tree with type annotations', async () => {
   const demo = buildDemoPerson();
-  const mockCache = { get: async () => demo.descBytes };
+  const mockCache = { get: async () => ({ bytes: demo.descBytes, changed: true }) };
   const engine = new PBEngine(mockCache as any);
 
   const msg = await engine.decode('test://demo.desc', 'demo.Person', false,
@@ -226,7 +226,7 @@ test('buildFieldTree builds tree with type annotations', async () => {
 
 test('renderTree produces readable text', async () => {
   const demo = buildDemoPerson();
-  const mockCache = { get: async () => demo.descBytes };
+  const mockCache = { get: async () => ({ bytes: demo.descBytes, changed: true }) };
   const engine = new PBEngine(mockCache as any);
 
   const msg = await engine.decode('test://demo.desc', 'demo.Person', false,
