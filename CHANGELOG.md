@@ -5,6 +5,11 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.2] - 2026-08-19
+
+### 修复
+- **`adb root` 后仍报「requires root (su) to check」**：`adb root` 成功会让 adbd 直接以 root 运行，`adb shell` 本身就是 `uid=0`，无需 su。但上一版 root 检测只探测 `su` 二进制（Magisk/SuperSU），userdebug/eng 构建通常无 su，导致误判为非 root。现在 root 检测拆两层：先 `isAdbRoot()`（`adb shell id` 输出 `uid=0`），再 fallback `hasSu()`；adbd 已 root 时用户证书目录直接 `ls`（不再 `su -c`），su 可用时才走 `su -c`。
+
 ## [0.6.1] - 2026-08-19
 
 ### 修复

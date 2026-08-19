@@ -103,7 +103,13 @@ function adbShell(serial, cmd) {
   }
 }
 
-/** Detect whether the device has a working su (root, e.g. Magisk/SuperSU). */
+/** Whether adbd is already running as root (e.g. `adb root` on userdebug/eng builds). */
+function isAdbRoot(serial) {
+  const r = adbShell(serial, 'id');
+  return r.ok && /uid=0/.test(r.out);
+}
+
+/** Whether the device has a working su binary (root, e.g. Magisk/SuperSU). */
 function hasSu(serial) {
   // `adb shell "su -c id"`：root 设备输出 `uid=0(root) ...`；无 su 二进制报
   // "not found"（→ ok:false）；su 存在但拒绝授权输出 "Permission denied"。
@@ -118,18 +124,19 @@ function detectCert(serial, hash) {
   const sysDirs = ['/apex/com.android.conscrypt/cacerts', '/system/etc/security/cacerts'];
   // 用户证书目录（user 0 = 主用户），13→15 从未迁移。
   // 注意：该目录受 SELinux 保护（标签 misc_user_data_file，shell 域无访问权），
-  // 非 root 设备 `ls` 必然 Permission denied —— 只能通过 su 探测。
+  // 非 root 设备 `ls` 必然 Permission denied —— 只能以 root 探测。
   const usrDir = '/data/misc/user/0/cacerts-added';
 
   // 证书命名 <hash>.<index>（同 subject 多证书时序号递增 .0/.1/.2）。
-  const probe = (dir, viaSu) => {
+  // mode: 'direct'（当前 shell 已是 root，直接 ls）| 'su'（su -c ls）
+  const probe = (dir, mode) => {
     let found = false;
     let denied = false;
     let ok = true;
     for (const idx of [0, 1, 2]) {
       const target = dir + '/' + hash + '.' + idx;
-      // 系统证书目录直接 ls；用户证书目录需 su -c（引号需穿透 adb 到设备 shell）
-      const cmd = viaSu
+      // 系统证书目录直接 ls；用户证书目录需 root（adbd root 直接 ls，否则 su -c）
+      const cmd = mode === 'su'
         ? '"su -c \'ls ' + target + '\'"'
         : 'ls ' + target;
       const r = adbShell(serial, cmd);
@@ -140,13 +147,15 @@ function detectCert(serial, hash) {
     return { dir, found, denied, ok };
   };
 
-  const system = sysDirs.map(d => probe(d, false));
+  const system = sysDirs.map(d => probe(d, 'direct'));
 
-  // 用户证书：非 root 设备无法探测（SELinux 阻止），标记 denied → unknown；
-  // 仅 su 可用（Magisk/SuperSU）时实际探测。
-  const root = hasSu(serial);
+  // 用户证书：非 root 设备无法探测（SELinux 阻止），标记 denied → unknown。
+  // root 来源二选一：adbd 已 root（`adb root`）→ 直接 ls；否则 su 可用 → su -c。
+  const adbRoot = isAdbRoot(serial);
+  const suRoot = !adbRoot && hasSu(serial);
+  const root = adbRoot || suRoot;
   const user = root
-    ? [probe(usrDir, true)]
+    ? [probe(usrDir, adbRoot ? 'direct' : 'su')]
     : [{ dir: usrDir, found: false, denied: true, ok: true }];
 
   return { state: classifyCertState(system, user), system, user, root };
