@@ -53,7 +53,7 @@ pbmockx rules add|list|del|save|reload ...               # patch 规则 CRUD（p
 pbmockx map-local add|list|del ...                        # map_local 规则（--data/--file）
 pbmockx map-remote add|list|del ...                       # map_remote 规则（--regex）
 pbmockx web                                                # 打开 whistle Web UI
-pbmockx connect-android [-s <serial>]                     # Android 代理配置 + 证书状态检测（system/user/not_installed/unknown）
+pbmockx connect-android [-s <serial>]                     # Android 代理配置 + 证书状态检测（system/user/not_found/unknown；用户证书目录受 SELinux 保护，非 root 无法自动确认 → unknown）
 pbmockx doctor                                             # 全链路检查（node/whistle/plugin/link/version）
 pbmockx fix                                                # 自动修复：rebuild→npm link→w2 restart→verify
 pbmockx agent-doc                                          # 打印 SKILL.md

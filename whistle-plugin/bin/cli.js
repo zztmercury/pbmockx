@@ -89,35 +89,80 @@ function adbShell(serial, cmd) {
   const full = (serial ? 'adb -s ' + serial + ' shell ' : 'adb shell ') + cmd;
   try { return { ok: true, out: execSync(full, { stdio: 'pipe' }).toString().trim() }; }
   catch (e) {
-    const msg = String((e.stderr || '').toString().trim() || e.message || '');
+    // adb 会把设备端的 stdout/stderr 合并转发到本地 stdout，所以命令
+    // 失败信息（如 "No such file" / "Permission denied"）通常在 e.stdout
+    // 而非 e.stderr —— 两者都查，否则 missing/denied 分类会失效。
+    const msg = String(
+      (e.stdout && e.stdout.toString().trim()) ||
+      (e.stderr && e.stderr.toString().trim()) ||
+      e.message || ''
+    );
     if (/No such file|does not exist/i.test(msg)) return { ok: true, out: '', missing: true };
     if (/Permission denied|not permitted|opendir failed/i.test(msg)) return { ok: true, out: '', denied: true };
     return { ok: false, err: msg };
   }
 }
 
+/** Detect whether the device has a working su (root, e.g. Magisk/SuperSU). */
+function hasSu(serial) {
+  // `adb shell "su -c id"`：root 设备输出 `uid=0(root) ...`；无 su 二进制报
+  // "not found"（→ ok:false）；su 存在但拒绝授权输出 "Permission denied"。
+  const r = adbShell(serial, '"su -c id"');
+  return r.ok && /uid=0/.test(r.out);
+}
+
 /** Detect cert by subject hash on device. state: system|user|not_found|unknown. */
 function detectCert(serial, hash) {
-  const pat = hash + '.*';
+  // 系统证书目录（world-readable，shell 可直接读）：Android ≤9 用 /system，
+  // 10+ 用 Conscrypt APEX，Android 14/15 必须查 APEX 路径。
   const sysDirs = ['/apex/com.android.conscrypt/cacerts', '/system/etc/security/cacerts'];
-  const usrDirs = ['/data/misc/user/0/cacerts-added', '/data/misc/keychain/cacerts-added'];
-  const probe = (dir) => {
-    const r = adbShell(serial, "ls '" + dir + "/" + pat + "' 2>/dev/null");
-    return { dir, found: r.ok && /[0-9a-f]{8}\.[0-9]+/.test(r.out), denied: !!r.denied, ok: r.ok };
+  // 用户证书目录（user 0 = 主用户），13→15 从未迁移。
+  // 注意：该目录受 SELinux 保护（标签 misc_user_data_file，shell 域无访问权），
+  // 非 root 设备 `ls` 必然 Permission denied —— 只能通过 su 探测。
+  const usrDir = '/data/misc/user/0/cacerts-added';
+
+  // 证书命名 <hash>.<index>（同 subject 多证书时序号递增 .0/.1/.2）。
+  const probe = (dir, viaSu) => {
+    let found = false;
+    let denied = false;
+    let ok = true;
+    for (const idx of [0, 1, 2]) {
+      const target = dir + '/' + hash + '.' + idx;
+      // 系统证书目录直接 ls；用户证书目录需 su -c（引号需穿透 adb 到设备 shell）
+      const cmd = viaSu
+        ? '"su -c \'ls ' + target + '\'"'
+        : 'ls ' + target;
+      const r = adbShell(serial, cmd);
+      if (r.ok && r.out) { found = true; break; }
+      if (r.denied) denied = true;
+      if (!r.ok) ok = false; // 其他错误（如设备离线）→ 无法判定
+    }
+    return { dir, found, denied, ok };
   };
-  const system = sysDirs.map(probe);
-  const user = usrDirs.map(probe);
-  return { state: classifyCertState(system, user), system, user };
+
+  const system = sysDirs.map(d => probe(d, false));
+
+  // 用户证书：非 root 设备无法探测（SELinux 阻止），标记 denied → unknown；
+  // 仅 su 可用（Magisk/SuperSU）时实际探测。
+  const root = hasSu(serial);
+  const user = root
+    ? [probe(usrDir, true)]
+    : [{ dir: usrDir, found: false, denied: true, ok: true }];
+
+  return { state: classifyCertState(system, user), system, user, root };
 }
 
 /** Classify cert state from probe results. Pure function. */
 function classifyCertState(system, user) {
   const systemFound = system.some(d => d.found);
   const userFound = user.some(d => d.found);
-  const allDenied = system.concat(user).every(d => !d.ok || d.denied);
+  // 任一目录 denied 或探测失败（!ok）都算「无法判定」——不能因为系统证书
+  // 没找到就下 "not_found" 结论，否则用户证书目录读不到（denied）时会把
+  // 「可能已装但读不到」误报成「未安装」。
+  const anyIndeterminate = system.concat(user).some(d => d.denied || !d.ok);
   if (systemFound) return 'system';
   if (userFound) return 'user';
-  if (allDenied) return 'unknown';
+  if (anyIndeterminate) return 'unknown';
   return 'not_found';
 }
 
@@ -285,7 +330,7 @@ Options:
 }
 
 function helpWeb() { console.log(`Usage: pbmockx web\n\nOpen whistle Web UI in browser.`); }
-function helpConnectAndroid() { console.log(`Usage: pbmockx connect-android [-s <serial>]\n\nConfigure Android device proxy and detect whistle rootCA install\nstatus (system / user / not_installed / unknown).\n\nStep 1 configures proxy (executed). Step 2 detects cert install status\n(read-only checks) — does NOT install or modify certs.`); }
+function helpConnectAndroid() { console.log(`Usage: pbmockx connect-android [-s <serial>]\n\nConfigure Android device proxy and detect whistle rootCA install\nstatus (system / user / not_found / unknown).\n\nStep 1 configures proxy (executed). Step 2 detects cert install status\n(read-only checks) — does NOT install or modify certs.\n\nNote: the user-cert directory is protected by SELinux — on non-root\ndevices it cannot be read, so status is 'unknown' unless the cert is\nfound as a system cert. Verify manually in Settings > Security.`); }
 function helpDoctor() { console.log(`Usage: pbmockx doctor\n\nCheck w2 + plugin + rules health.\n\nIf plugin is not reachable, run 'pbmockx fix' to auto-repair.`); }
 function helpFix() { console.log(`Usage: pbmockx fix\n\nAuto-repair plugin installation:\n  1. Rebuild (npm install + tsc) if needed\n  2. Re-link (npm link) if unlinked\n  3. Restart whistle to reload plugin + rules.txt\n\nUse when plugin was uninstalled from Web UI or npm link broke.`); }
 function helpAgentDoc() { console.log(`Usage: pbmockx agent-doc\n\nPrint SKILL.md content.`); }
@@ -618,16 +663,19 @@ async function cmd_connect_android(args) {
   console.log('Proxy: ' + proxy.state + (proxy.raw ? ' [' + proxy.raw + ']' : '') + (proxy.state === 'mismatch' ? ' (expected ' + proxy.expected + ')' : ''));
 
   let certState = 'unknown';
+  let cert = null;
   try {
     const pem = await fetchRootCa();
     const hash = subjectHashOld(pem);
     console.log('RootCA hash: ' + hash);
-    const cert = detectCert(serial, hash);
+    cert = detectCert(serial, hash);
     certState = cert.state;
     const sysHit = cert.system.find(d => d.found);
     const usrHit = cert.user.find(d => d.found);
-    console.log('Cert (system): ' + (sysHit ? 'found @ ' + sysHit.dir : 'not found'));
-    console.log('Cert (user):   ' + (usrHit ? 'found @ ' + usrHit.dir : 'not found'));
+    const sysDenied = cert.system.some(d => d.denied);
+    console.log('Cert (system): ' + (sysHit ? 'found @ ' + sysHit.dir : (sysDenied ? 'cannot check (permission denied)' : 'not found')));
+    // 用户证书：非 root 设备无法读（SELinux 阻止），如实说明；root 设备已实际探测。
+    console.log('Cert (user):   ' + (usrHit ? 'found @ ' + usrHit.dir : (cert.root ? 'not found' : 'requires root (su) to check')));
     console.log('Cert status:   ' + certState);
   } catch (e) {
     console.log('Cert status:   unknown (rootCA fetch/compute failed: ' + e.message + ')');
@@ -646,8 +694,21 @@ async function cmd_connect_android(args) {
     console.log('  3. Settings > Security > Install from storage');
     console.log('  Re-run: pbmockx connect-android' + (serial ? ' -s ' + serial : '') + '  (after install, to verify)');
   } else if (certState === 'unknown') {
-    console.log('\n  Cannot determine cert status (permission denied or device offline).');
-    console.log('  Verify manually: Settings > Security > Encryption & credentials > Trusted credentials');
+    // 非 root 设备：系统证书未装、用户证书目录受 SELinux 保护读不到，无法自动确认。
+    // 引导用户到设置手动核对，而非误导为「已装/未装」。
+    console.log('\n  Cannot automatically confirm cert status:');
+    if (!cert || !cert.root) {
+      console.log('  - System cert: not installed');
+      console.log('  - User cert:   cannot check without root (su) — the user-cert');
+      console.log('    directory is protected by SELinux on non-root devices.');
+    } else {
+      console.log('  (permission denied or device offline)');
+    }
+    console.log('  Verify manually: Settings > Security > Encryption & credentials >');
+    console.log('    Trusted credentials > User tab (look for the whistle/pbmockx CA).');
+    console.log('  Note: a USER cert is NOT trusted by apps targeting Android 7+ unless');
+    console.log('  the app uses networkSecurityConfig. For reliable HTTPS capture, install');
+    console.log('  as a SYSTEM cert (root / Magisk) or use an emulator.');
   } else if (certState === 'system') {
     console.log('\n  Cert installed as SYSTEM certificate — apps should trust it.');
   }

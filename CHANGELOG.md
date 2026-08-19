@@ -5,6 +5,18 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.1] - 2026-08-19
+
+### 修复
+- **connect-android 证书检测误报 not found**：用户证书目录 `/data/misc/user/0/cacerts-added` 受 **SELinux** 保护（标签 `misc_user_data_file`，shell 域无访问权），非 root 设备上 `ls` 必然 `Permission denied`——之前把「读不到」误判为「未安装」（not_found）。现在：系统证书目录（world-readable）直接探测；用户证书目录仅 root 设备（`su -c`）探测，非 root 设备如实返回 `unknown` 并引导手动到「设置 → 安全 → 加密与凭据 → 信任的凭据」核对。
+- **`adbShell` 错误分类失效**：adb 把设备端 stderr 合并进本地 stdout，原实现只查 `e.stderr`，导致 `missing`/`denied` 分类永不生效。改为 stdout/stderr 都查。
+- **`classifyCertState` 语义修正**：`allDenied`（every）→ `anyIndeterminate`（some）——任一目录 denied/失败即 `unknown`，避免「系统证书没找到 + 用户目录读不到」误报 not_found。
+- 移除噪音目录 `/data/misc/keychain/cacerts-added`（仅 zygote 早期默认值，app 视角用户证书一律在 `user/0`）。
+
+### 变更
+- 证书探测从 glob（`hash.*`，需要目录读权限）改为逐个探测确切文件名 `<hash>.0/.1/.2`。
+- 新增 `hasSu()` root 检测（`su -c id` 输出 `uid=0` 判定）；输出文案区分「非 root 无法读用户证书」vs「权限/离线」。
+
 ## [0.6.0] - 2026-08-19
 
 ### 新增

@@ -421,6 +421,10 @@ test('classifyCertState classifies cert detection results', () => {
   assert.strictEqual(cli.classifyCertState([NF], [NF]), 'not_found');
   assert.strictEqual(cli.classifyCertState([D], [D]), 'unknown');
   assert.strictEqual(cli.classifyCertState([F], [F]), 'system');
+  // 系统证书未找到 + 用户证书目录 denied → 无法判定（不能误报 not_found）
+  assert.strictEqual(cli.classifyCertState([NF], [D]), 'unknown');
+  // 任一目录探测失败（!ok）→ 无法判定
+  assert.strictEqual(cli.classifyCertState([{ found: false, ok: false }], [NF]), 'unknown');
   return Promise.resolve();
 });
 
