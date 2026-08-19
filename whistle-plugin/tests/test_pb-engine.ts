@@ -8,7 +8,7 @@ import * as assert from 'assert';
 import protobuf from 'protobufjs';
 import 'protobufjs/ext/descriptor';
 import { PBEngine, DescCache } from '../src/pb-engine';
-import { parsePath, setByPath, getByPath } from '../src/path-nav';
+import { parsePath, setByPath, getByPath, appendByPath, insertByPath, removeByPath } from '../src/path-nav';
 import { MockRule, RuleEngine } from '../src/rules';
 import { isPb, isJson, isForm, parseForm, parseCtParams, detect } from '../src/content-type';
 import { buildFieldTree, renderTree } from '../src/field-tree';
@@ -149,6 +149,21 @@ test('getByPath/setByPath navigate objects', () => {
   assert.strictEqual(getByPath(obj, ['a', 'b', 0, 'c']), 1);
   setByPath(obj, ['a', 'b', 0, 'c'], 42);
   assert.strictEqual(obj.a.b[0].c, 42);
+  return Promise.resolve();
+});
+
+test('appendByPath/insertByPath/removeByPath operate on repeated fields', () => {
+  const obj = { list: [{ id: 1 }, { id: 3 }], tags: ['a', 'b'] };
+  appendByPath(obj, ['tags'], 'c');
+  assert.deepStrictEqual(obj.tags, ['a', 'b', 'c']);
+  insertByPath(obj, ['list'], 1, { id: 2 });
+  assert.deepStrictEqual(obj.list.map(x => x.id), [1, 2, 3]);
+  removeByPath(obj, ['list'], 0);
+  assert.deepStrictEqual(obj.list.map(x => x.id), [2, 3]);
+  // remove out of range throws
+  assert.throws(() => removeByPath(obj, ['list'], 99));
+  // append to non-array throws
+  assert.throws(() => appendByPath({ list: 1 }, ['list'], 'x'));
   return Promise.resolve();
 });
 
@@ -309,6 +324,68 @@ test('RuleEngine save/reload round-trip', () => {
   const n = engine2.reload();
   assert.strictEqual(n, 2);
   assert.strictEqual(engine2.list().length, 2);
+
+  fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+test('RuleEngine apply with repeated-field actions', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
+  const engine = new RuleEngine(path.join(tmpDir, 'rules.yaml'), path.join(tmpDir, 'mock-data'));
+
+  const data = { items: [{ id: 1 }, { id: 3 }], tags: ['a', 'b'] };
+
+  // append
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api', path: 'items', action: 'append', value: { id: 4 } }));
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api', path: 'tags', action: 'append', value: 'c' }));
+  let r = engine.apply('http://api', 'json', data);
+  assert.deepStrictEqual(r.items.map(x => x.id), [1, 3, 4]);
+  assert.deepStrictEqual(r.tags, ['a', 'b', 'c']);
+
+  // insert (inserts before index)
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api', path: 'items', action: 'insert', index: 1, value: { id: 2 } }));
+  r = engine.apply('http://api', 'json', data);
+  assert.deepStrictEqual(r.items.map(x => x.id), [1, 2, 3, 4]);
+
+  // remove
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api', path: 'items', action: 'remove', index: 0 }));
+  r = engine.apply('http://api', 'json', data);
+  assert.deepStrictEqual(r.items.map(x => x.id), [2, 3, 4]);
+
+  fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+test('RuleEngine append/remove round-trips through PB encode', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
+  const engine = new RuleEngine(path.join(tmpDir, 'rules.yaml'), path.join(tmpDir, 'mock-data'));
+
+  // build a message type with a repeated message field
+  const root = protobuf.Root.fromJSON({
+    nested: {
+      Item: { fields: { name: { type: 'string', id: 1 }, id: { type: 'int32', id: 2 } } },
+      Resp: { fields: { items: { rule: 'repeated', type: 'Item', id: 1 } } },
+    },
+  });
+  root.resolveAll();
+  const Resp = root.lookupType('Resp');
+
+  const msg = Resp.decode(Resp.encode({ items: [{ name: 'a', id: 1 }] }).finish());
+
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api', path: 'items', action: 'append', value: { name: 'b', id: 2 } }));
+  const patched = engine.apply('http://api', 'protobuf', msg);
+
+  const back = Resp.decode(Resp.encode(patched).finish()) as any;
+  assert.strictEqual(back.items.length, 2);
+  assert.strictEqual(back.items[1].name, 'b');
+  assert.strictEqual(back.items[1].id, 2);
+
+  // remove index 0
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api', path: 'items', action: 'remove', index: 0 }));
+  const patched2 = engine.apply('http://api', 'protobuf', msg);
+  const back2 = Resp.decode(Resp.encode(patched2).finish()) as any;
+  assert.strictEqual(back2.items.length, 1);
+  assert.strictEqual(back2.items[0].name, 'b');
 
   fs.rmSync(tmpDir, { recursive: true });
   return Promise.resolve();

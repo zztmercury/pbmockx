@@ -49,6 +49,7 @@ pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full]
                                                           #   --path <path> 导航到子树（折叠显示），路径含 [n] 需加引号
                                                           #   --full        完整展开所有层级（不截断）
 pbmockx rules add|list|del|save|reload ...               # patch 规则 CRUD（path 可穿透 google.protobuf.Any）
+                                                        #   add 支持 --append/--insert <idx>/--remove <idx> 操作 repeated 字段条目（缺省整体替换）
 pbmockx map-local add|list|del ...                        # map_local 规则（--data/--file）
 pbmockx map-remote add|list|del ...                       # map_remote 规则（--regex）
 pbmockx web                                                # 打开 whistle Web UI
@@ -79,7 +80,7 @@ cd whistle-plugin && npx tsc --noEmit
 
 | type | 落点 | 关键字段 | 作用 |
 |---|---|---|---|
-| `patch` | resRead（pipe） | `path`, `value`, `protocol` | 在 message 对象上按 path set 字段（path 可穿透 `google.protobuf.Any`——pipe hook 先 `expandAny` 再 patch 再 `packAny`），fromObject→encode |
+| `patch` | resRead（pipe） | `path`, `value`, `protocol`, `action`(`set`/`append`/`insert`/`remove`), `index` | 在 message 对象上按 path set 字段（path 可穿透 `google.protobuf.Any`——pipe hook 先 `expandAny` 再 patch 再 `packAny`），fromObject→encode；`action` 对 repeated 字段做条目级新增/插入/删除 |
 | `map_local` (data) | resRead（pipe） | `data_file`, `desc`, `messageType` | 整 body 替换为外部 JSON 文件，PB encode 后下发 |
 | `map_local` (file) | rulesServer（whistle 原生） | `file_path` | 翻译为 whistle `file://` 原生规则，由 whistle 替换 body |
 | `map_remote` | rulesServer（whistle 原生） | `replacement`, `is_regex` | 翻译为 whistle `xxx://` 原生规则，重写 url + Host |

@@ -15,10 +15,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as yaml from 'js-yaml';
-import { parsePath, setByPath, type PathSegment } from './path-nav';
+import { parsePath, setByPath, appendByPath, insertByPath, removeByPath, type PathSegment } from './path-nav';
 import type { Protocol } from './content-type';
 
 export type RuleType = 'patch' | 'map_local' | 'map_remote';
+
+/** Patch operation: set (default, replace whole field) | append | insert | remove. */
+export type PatchAction = 'set' | 'append' | 'insert' | 'remove';
 
 export interface MockRuleData {
   id?: string;
@@ -28,6 +31,9 @@ export interface MockRuleData {
   path?: string;
   value?: any;
   protocol?: Protocol;
+  // patch on repeated fields
+  action?: PatchAction;
+  index?: number;
   // map_local
   source?: 'file' | 'data';
   data_file?: string;
@@ -51,6 +57,8 @@ export class MockRule {
   path?: string;
   value?: any;
   protocol?: Protocol;
+  action?: PatchAction;
+  index?: number;
   // map_local
   source?: 'file' | 'data';
   dataFile?: string;
@@ -72,6 +80,8 @@ export class MockRule {
     this.path = data.path;
     this.value = data.value;
     this.protocol = data.protocol;
+    this.action = data.action || 'set';
+    this.index = data.index;
     this.source = data.source || 'file';
     this.dataFile = data.data_file;
     this.filePath = data.file_path;
@@ -95,6 +105,8 @@ export class MockRule {
       path: this.path,
       value: this.value,
       protocol: this.protocol,
+      action: this.action === 'set' ? undefined : this.action,
+      index: this.index,
       source: this.source,
       data_file: this.dataFile,
       file_path: this.filePath,
@@ -208,10 +220,24 @@ export class RuleEngine {
           result = rule.data;
         }
       } else if (rule.type === 'patch') {
-        // Patch: path navigation to set field
+        // Patch: path navigation to set/append/insert/remove field
         if (rule.path) {
           const parts: PathSegment[] = parsePath(rule.path);
-          setByPath(result, parts, rule.value);
+          switch (rule.action || 'set') {
+            case 'append':
+              appendByPath(result, parts, rule.value);
+              break;
+            case 'insert':
+              insertByPath(result, parts, rule.index ?? 0, rule.value);
+              break;
+            case 'remove':
+              removeByPath(result, parts, rule.index ?? 0);
+              break;
+            case 'set':
+            default:
+              setByPath(result, parts, rule.value);
+              break;
+          }
         }
       }
     }

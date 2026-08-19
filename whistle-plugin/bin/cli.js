@@ -231,8 +231,11 @@ function helpRules() {
   console.log(`Usage: pbmockx rules <subcommand> [args]
 
 Subcommands:
-  add <url> <path> <value> [--protocol pb|json]  Add patch rule
-  list [--type patch|map_local|map_remote]       List rules
+  add <url> <path> <value> [--protocol pb|json]   Add patch rule (replace field)
+  add <url> <path> --append <value>               Append item to a repeated field
+  add <url> <path> --insert <idx> <value>         Insert item at index of a repeated field
+  add <url> <path> --remove <idx>                 Remove item at index of a repeated field
+  list [--type patch|map_local|map_remote]        List rules
   del <id>                                        Delete rule by ID
   save                                            Save rules to rules.yaml
   reload                                          Reload rules from rules.yaml
@@ -242,6 +245,9 @@ Options:
 
 Examples:
   pbmockx rules add 'api/game' game.name TestName --protocol pb
+  pbmockx rules add 'api/game' game.tags --append '{"k":"v"}'
+  pbmockx rules add 'api/game' game.list --insert 1 '{"id":9}'
+  pbmockx rules add 'api/game' game.list --remove 0
   pbmockx rules list
   pbmockx rules del abc12345`);
 }
@@ -422,12 +428,51 @@ async function cmd_rules(args) {
   if (sub === 'add') {
     const url = args.find(a => !a.startsWith('-') && a !== 'add');
     const rulePath = args.find((a, i) => i > 0 && !a.startsWith('-') && a !== url);
-    const value = args.find((a, i) => i > args.indexOf(rulePath) && !a.startsWith('-'));
-    if (!url || !rulePath) { console.error('Usage: pbmockx rules add <url> <path> <value> [--protocol pb|json]'); process.exit(1); }
     const protoIdx = args.indexOf('--protocol');
     const protocol = protoIdx >= 0 ? (args[protoIdx + 1] === 'pb' ? 'protobuf' : args[protoIdx + 1]) : undefined;
-    const rule = { type: 'patch', url_pattern: url, path: rulePath, value: _parseValue(value) };
+    const appendIdx = args.indexOf('--append');
+    const insertIdx = args.indexOf('--insert');
+    const removeIdx = args.indexOf('--remove');
+
+    // action dispatch: exactly one of --append/--insert/--remove, else plain set
+    const actions = [appendIdx, insertIdx, removeIdx].filter(i => i >= 0);
+    if (actions.length > 1) {
+      console.error('Error: --append/--insert/--remove are mutually exclusive');
+      process.exit(1);
+    }
+
+    const rule = { type: 'patch', url_pattern: url, path: rulePath };
     if (protocol) rule.protocol = protocol;
+
+    if (appendIdx >= 0) {
+      if (!url || !rulePath) { console.error('Usage: pbmockx rules add <url> <path> --append <value>'); process.exit(1); }
+      const value = args.find((a, i) => i > appendIdx && !a.startsWith('-'));
+      if (value === undefined) { console.error('Error: --append requires a <value>'); process.exit(1); }
+      rule.action = 'append';
+      rule.value = _parseValue(value);
+    } else if (insertIdx >= 0) {
+      if (!url || !rulePath) { console.error('Usage: pbmockx rules add <url> <path> --insert <idx> <value>'); process.exit(1); }
+      const idxRaw = args[insertIdx + 1];
+      const value = args.find((a, i) => i > insertIdx + 1 && !a.startsWith('-'));
+      if (!idxRaw || /^-/.test(idxRaw) || value === undefined) {
+        console.error('Usage: pbmockx rules add <url> <path> --insert <idx> <value>'); process.exit(1);
+      }
+      rule.action = 'insert';
+      rule.index = parseInt(idxRaw, 10);
+      rule.value = _parseValue(value);
+    } else if (removeIdx >= 0) {
+      if (!url || !rulePath) { console.error('Usage: pbmockx rules add <url> <path> --remove <idx>'); process.exit(1); }
+      const idxRaw = args[removeIdx + 1];
+      if (!idxRaw || /^-/.test(idxRaw)) { console.error('Usage: pbmockx rules add <url> <path> --remove <idx>'); process.exit(1); }
+      rule.action = 'remove';
+      rule.index = parseInt(idxRaw, 10);
+    } else {
+      // plain set (backward compatible): value is the 3rd positional arg
+      const value = args.find((a, i) => i > args.indexOf(rulePath) && !a.startsWith('-'));
+      if (!url || !rulePath) { console.error('Usage: pbmockx rules add <url> <path> <value> [--protocol pb|json]'); process.exit(1); }
+      rule.value = _parseValue(value);
+    }
+
     const result = await _req('POST', '/cgi-bin/rules', rule);
     console.log('Rule added:', result.rule.id, result.rule.url_pattern, result.rule.path, '=>', result.rule.value);
   } else if (sub === 'list') {
@@ -435,7 +480,13 @@ async function cmd_rules(args) {
     const type = typeIdx >= 0 ? args[typeIdx + 1] : undefined;
     const qs = type ? '?type=' + type : '';
     const data = await _req('GET', '/cgi-bin/rules' + qs);
-    printTable(data.map(r => ({ id: r.id, type: r.type, url: (r.url_pattern || '').slice(0, 50), path: r.path || r.replacement || r.file_path || '', value: r.value !== undefined ? JSON.stringify(r.value) : '' })));
+    printTable(data.map(r => {
+      let pathCol = r.path || r.replacement || r.file_path || '';
+      if (r.type === 'patch' && r.action && r.action !== 'set') {
+        pathCol += ' [' + r.action + (r.index !== undefined ? ' ' + r.index : '') + ']';
+      }
+      return { id: r.id, type: r.type, url: (r.url_pattern || '').slice(0, 50), path: pathCol, value: r.value !== undefined ? JSON.stringify(r.value) : '' };
+    }));
   } else if (sub === 'del') {
     const id = args.find(a => !a.startsWith('-') && a !== 'del');
     if (!id) { console.error('Usage: pbmockx rules del <id>'); process.exit(1); }

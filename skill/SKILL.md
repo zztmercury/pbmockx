@@ -154,6 +154,34 @@ pbmockx decode <new_id> --original --path game  # patch 前: name=TapTap（对�
 - **pipe 规则由 `rules.txt` 自动注入** —— 只加 `rules add` 即可生效，
   无需在 whistle UI 里手写 `pipe://pbmockx` 规则。
 
+#### 2.1.1 Repeated 字段的新增/删除/插入
+
+patch 规则默认（不带 action flag）是**整体替换**字段值。对 repeated
+（列表）字段，可以用 action flag 做**条目级**操作：
+
+```
+# 追加一条到列表末尾
+pbmockx rules add '<url_regex>' 'items' --append '{"id":9,"name":"New"}'
+
+# 插入到指定索引（插到 items[1] 前面，原 [1] 及之后整体后移）
+pbmockx rules add '<url_regex>' 'items' --insert 1 '{"id":8}'
+
+# 删除指定索引的条目
+pbmockx rules add '<url_regex>' 'items' --remove 0
+```
+
+- `--append` / `--insert` / `--remove` 三者互斥；不带任一 flag 时保持
+  原有整体替换语义（向后兼容）。
+- `--append <value>` / `--insert <idx> <value>` 的 `<value>` 会先按 JSON
+  解析（同普通 patch）。对 PB 的 message 列表，传一个 JSON 对象即可，
+  编码时 protobufjs 会自动把它转成对应 message（enum 可传数字或名字、
+  bytes 传 base64、int64 传数字）。
+- `--remove <idx>` 不需要 value，索引越界会在该次响应抛出 patch_error。
+- path 直接指向 repeated 字段本身（如 `items`、`game.tags`），**不要**带
+  `[n]` 索引 —— 索引由 `--insert`/`--remove` 的 `<idx>` 提供。想改列表中
+  某个已有条目的内部字段（如 `items[0].name`），仍用普通 set patch：
+  `pbmockx rules add '<url>' 'items[0].name' 'NewName'`。
+
 ### 2.2 Map Local — 替换整个响应 body
 
 两种模式：
@@ -253,6 +281,9 @@ pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full]
 ### 规则 — patch 类型（持久化、按路径）
 ```
 pbmockx rules add <url_regex> <path> <value> [--protocol pb|json]
+pbmockx rules add <url_regex> <path> --append <value>
+pbmockx rules add <url_regex> <path> --insert <idx> <value>
+pbmockx rules add <url_regex> <path> --remove <idx>
 pbmockx rules list [--type patch|map_local|map_remote]
 pbmockx rules del <id>
 pbmockx rules save                    # 手动写回 rules.yaml
@@ -290,6 +321,9 @@ pbmockx version [--check]             # 显示版本；--check 查询 GitHub 最
   `null`、对象（`{"k":"v"}`）、数组（`[1,2]`）。否则当作字符串处理。
   在 shell 中，字符串需加引号：`"hello"`。对象/数组用单引号包裹
   JSON：`'{"k":"v"}'`。
+- **repeated 字段条目操作**：`--append <value>` 追加、`--insert <idx> <value>`
+  插入、`--remove <idx>` 删除；不带这些 flag 时 `rules add <path> <value>`
+  为整体替换（见 §2.1.1）。
 - path **区分大小写** —— proto 字段名是 snake_case（不是 camelCase）。
 
 ### ⚠️ PB 类型陷阱 —— v0.4.0 与旧版的关键差异

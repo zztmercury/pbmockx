@@ -33,6 +33,37 @@ export function setByPath(obj: any, parts: PathSegment[], value: any): void {
   cur[parts[parts.length - 1]] = value;
 }
 
+/** Append `value` to the array at `parts` (protobufjs repeated fields are plain arrays). */
+export function appendByPath(obj: any, parts: PathSegment[], value: any): void {
+  if (parts.length === 0) return;
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+  const arr = cur[parts[parts.length - 1]];
+  if (!Array.isArray(arr)) throw new Error(`path is not a repeated field: ${parts.join('.')}`);
+  arr.push(value);
+}
+
+/** Insert `value` into the array at `parts` before `index` (negative counts from the end). */
+export function insertByPath(obj: any, parts: PathSegment[], index: number, value: any): void {
+  if (parts.length === 0) return;
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+  const arr = cur[parts[parts.length - 1]];
+  if (!Array.isArray(arr)) throw new Error(`path is not a repeated field: ${parts.join('.')}`);
+  arr.splice(index, 0, value);
+}
+
+/** Remove the item at `index` from the array at `parts`. */
+export function removeByPath(obj: any, parts: PathSegment[], index: number): void {
+  if (parts.length === 0) return;
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]];
+  const arr = cur[parts[parts.length - 1]];
+  if (!Array.isArray(arr)) throw new Error(`path is not a repeated field: ${parts.join('.')}`);
+  if (index < 0 || index >= arr.length) throw new Error(`index ${index} out of range (length ${arr.length})`);
+  arr.splice(index, 1);
+}
+
 /** Check whether a path exists in the object. */
 export function hasPath(obj: any, parts: PathSegment[]): boolean {
   try {

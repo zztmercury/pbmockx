@@ -5,6 +5,15 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.0] - 2026-08-19
+
+### 新增
+- **repeated 字段条目级增删**：patch 规则新增 `action` 字段（`set` 缺省 / `append` / `insert` / `remove`），配合 `index` 对 repeated（列表）字段做条目级操作，不再只能整体替换。CLI `rules add` 支持 `--append <value>`（末尾追加）、`--insert <idx> <value>`（插到指定索引前）、`--remove <idx>`（删除指定索引，无需 value）；三者互斥，不带任一 flag 保持原有整体替换语义（向后兼容）。`path-nav.ts` 新增 `appendByPath`/`insertByPath`/`removeByPath`（非数组/越界抛错，落 `patch_error`）。PB/JSON 行为一致：`--append`/`--insert` 传入 JSON 对象时 protobufjs 自动转为对应 message（enum 传数字/名字、bytes 传 base64、int64 传数字）。`rules list` 输出对非 set action 标注 `[append]`/`[insert N]`/`[remove N]`。
+- **单测增强**：20→23 个，新增 path-nav 条目操作、RuleEngine apply action 分发、PB encode 往返 3 个测试。
+
+### 文档
+- SKILL.md 新增 §2.1.1「Repeated 字段的新增/删除/插入」+ 命令参考与 path/value 语法同步；rules.yaml.example 补充 `action`/`index` 字段与示例；AGENTS.md 同步命令与规则引擎表。
+
 ## [0.5.1] - 2026-08-18
 
 ### 修复
