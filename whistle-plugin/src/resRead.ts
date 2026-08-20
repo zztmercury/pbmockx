@@ -7,7 +7,7 @@
 
 import { detect, parseForm, type DetectInfo } from './content-type';
 import { pbEngine, rules, flowStore } from './ctx';
-import { readBody, cloneData } from './helpers';
+import { readBody, cloneData, pipeLog } from './helpers';
 import { expandAny, packAny } from './any-expand';
 import * as zlib from 'zlib';
 
@@ -22,6 +22,7 @@ async function decodeForDisplay(info: DetectInfo, data: Buffer): Promise<any> {
 
 export default (server: any, options: any) => {
   server.on('request', async (req: any, res: any) => {
+    const t0 = Date.now();
     const fullUrl = req.originalReq?.fullUrl || '';
     const sessionId = req.originalReq?.id || fullUrl;
     const resHeaders = req.headers || {};
@@ -29,6 +30,9 @@ export default (server: any, options: any) => {
     const encoding = resHeaders['content-encoding'] || '';
     const statusCode = req.originalRes?.statusCode || 200;
     const method = req.originalReq?.method || 'GET';
+    const shortUrl = fullUrl.slice(0, 80);
+
+    pipeLog('res', sessionId, `begin status=${statusCode} ${method} ${shortUrl}`);
 
     // 立即记录响应元数据（status/headers），即使后续 readBody 失败或 decode
     // 被跳过，flow 也有响应状态，不会出现 status 空 → 便于定位超时。
@@ -42,6 +46,7 @@ export default (server: any, options: any) => {
     } catch (e: any) {
       // Stream errored mid-body — nothing to forward, but must not leave the
       // pipe hanging (whistle waits for res.end()). Flush empty and bail.
+      pipeLog('res', sessionId, `read-error ${e?.message || e} elapsed=${Date.now() - t0}ms`);
       flowStore.upsert(sessionId, {
         url: fullUrl, method, status: statusCode, resHeaders,
         error: 'resRead stream failed: ' + (e?.message || e), ts: Date.now(),
@@ -49,6 +54,7 @@ export default (server: any, options: any) => {
       try { res.end(); } catch {}
       return;
     }
+    pipeLog('res', sessionId, `body-read ${body.length}B read=${Date.now() - t0}ms`);
 
     let decompressed = body;
     if (encoding.includes('gzip')) { try { decompressed = zlib.gunzipSync(body); } catch {} }
@@ -62,6 +68,7 @@ export default (server: any, options: any) => {
         url: fullUrl, method, status: statusCode, resHeaders,
         resOriginalRaw: decompressed, ts: Date.now(),
       });
+      pipeLog('res', sessionId, `-> detect-null ${body.length}B total=${Date.now() - t0}ms`);
       return;
     }
 
@@ -77,6 +84,7 @@ export default (server: any, options: any) => {
         resHeaders, resInfo: info, resDecoded: parsed, resOriginalRaw: decompressed,
         ts: Date.now(),
       });
+      pipeLog('res', sessionId, `-> form ${body.length}B total=${Date.now() - t0}ms`);
       return;
     }
 
@@ -91,6 +99,7 @@ export default (server: any, options: any) => {
         resHeaders, resInfo: info, resDecoded: null, resOriginalRaw: decompressed,
         ts: Date.now(),
       });
+      pipeLog('res', sessionId, `-> forwarded ${body.length}B total=${Date.now() - t0}ms`);
       return;
     }
 
@@ -131,6 +140,7 @@ export default (server: any, options: any) => {
       });
 
       res.end(encoded);
+      pipeLog('res', sessionId, `-> patched ${encoded.length}B total=${Date.now() - t0}ms`);
     } catch (e: any) {
       console.error('[pbmockx] resRead error ' + fullUrl + ':', e.message);
       flowStore.upsert(sessionId, {
@@ -138,6 +148,7 @@ export default (server: any, options: any) => {
         resHeaders, resInfo: info, resDecoded: null, resOriginalRaw: decompressed,
         error: e.message, ts: Date.now(),
       });
+      pipeLog('res', sessionId, `-> error ${e.message} total=${Date.now() - t0}ms`);
       res.end(body);
     }
   });
