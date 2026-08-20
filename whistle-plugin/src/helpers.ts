@@ -8,9 +8,44 @@ import * as crypto from 'crypto';
 export function readBody(req: any): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+    let settled = false;
+
+    const onData = (c: Buffer) => chunks.push(c);
+    const onEnd = () => settle();
+    const onError = (e: any) => settle(e);
+    // whistle pipe decoder emits 'close' (NOT 'end'/'error') when the socket
+    // is reset or the client disconnects mid-body. If the stream already ended
+    // (readableEnded), close is a normal post-end cleanup → resolve. Otherwise
+    // close means we got torn down before the \n0\n terminal frame → reject so
+    // the hook can record the abort instead of treating partial bytes as a
+    // complete body.
+    const onClose = () => {
+      if (req.readableEnded) settle();
+      else settle(new Error('pipe closed before terminal frame'));
+    };
+
+    const cleanup = () => {
+      req.removeListener('data', onData);
+      req.removeListener('end', onEnd);
+      req.removeListener('error', onError);
+      req.removeListener('close', onClose);
+    };
+
+    const settle = (err?: any) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (err) reject(err);
+      else resolve(Buffer.concat(chunks));
+    };
+
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
+    req.on('close', onClose);
+
+    // Defensive: stream may already be fully consumed/ended before we attached.
+    if (req.readableEnded) settle();
   });
 }
 

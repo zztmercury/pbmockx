@@ -93,6 +93,8 @@ PB 全限定消息类型名。记下你要 mock 的 flow 的 `id`（接受前 8 
   - `pbmockx decode <id> --full`：完整展开所有层级（不截断，等同旧版默认行为）。
   - `pbmockx decode <id> --original`：显示应用任何 patch 规则**之前**的原始数据
     （可与 `--path` / `--full` 组合，如 `--original --path game`）。
+  - `--path` / `--full` 时默认**省略** method/url/headers（只输出 body，省 token）；
+    需要时加 `--headers` 找回。
   - 输出格式：`=== Response ===` + 状态行 + headers + 空行 + `=== Response Body (PB: <type>) ===`
     + `renderTree` 字段树（`name#N (type) = value`，与 PBView 同格式）。
 - **google.protobuf.Any 字段**：PBView / CLI 会基于 `type_url` 自动解码内层
@@ -256,12 +258,13 @@ pbmockx web                           # 打开 whistle Web UI
 ### 抓包与查看
 ```
 pbmockx flows [--filter <regex>]                            # 列出 flow：id method status protocol messageType url
-pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full]
+pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full] [--headers]
                                                             # 默认折叠模式（节省 token，适合 AI agent）
                                                             #   --req/--res     只看 Request 或 Response（同一 flow，不是找另一个 flow）
                                                             #   --original      patch 前原始数据（可与 --path/--full 组合）
                                                             #   --path <path>   导航到子树（折叠显示），路径含 [n] 需加引号
                                                             #   --full          完整展开所有层级（不截断，旧版默认）
+                                                            #   --headers       带 --path/--full 时仍显示 method/url/headers（默认省略，省 token）
 ```
 > - **PB flow**：在 whistle UI 的 Network 里点开请求，切到 **Response → PBView**
 >   sub-tab（响应）或 **Request → PBView** sub-tab（请求体）查看结构化字段树

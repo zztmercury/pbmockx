@@ -255,7 +255,7 @@ Examples:
 }
 
 function helpDecode() {
-  console.log(`Usage: pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full]
+  console.log(`Usage: pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full] [--headers]
 
 Show flow details: headers + decoded body (PB field tree or JSON).
 
@@ -268,10 +268,13 @@ Options:
   --original                      Show original (pre-patch) data instead of patched
   --path <path>                   Navigate to subtree (e.g. data.list[0].list[2].app)
   --full                          Expand all fields (default: collapsed top-level only)
+  --headers                       Show method/url/headers even with --path/--full
   -h, --help                      Show this help
 
 Default output is collapsed — nested messages show (type, N fields) ▸.
 Use --path to drill into a subtree, or --full to expand everything.
+With --path/--full, method/url/headers are omitted (body-only) to save tokens;
+add --headers to include them.
 
 Examples:
   pbmockx decode abc123
@@ -408,6 +411,7 @@ async function cmd_decode(args) {
   const wantRes = args.includes('--res');
   const original = args.includes('--original');
   const fullExpand = args.includes('--full');
+  const showHeaders = args.includes('--headers');
   const pathIdx = args.indexOf('--path');
   const path = pathIdx >= 0 ? args[pathIdx + 1] : undefined;
   const qs = original ? '?original=1' : '';
@@ -419,22 +423,25 @@ async function cmd_decode(args) {
   const showRes = wantRes || (!wantReq && data.hasRes);
 
   if (showReq && (data.reqHeaders || data.reqData !== undefined)) {
-    printSection('Request', data.method, data.url, data.reqHeaders, data.reqProtocol, data.reqMessageType, data.reqData, original, path, fullExpand);
+    printSection('Request', data.method, data.url, data.reqHeaders, data.reqProtocol, data.reqMessageType, data.reqData, original, path, fullExpand, showHeaders);
     if (showRes) console.log('');
   }
   if (showRes && (data.resHeaders || data.resData !== undefined)) {
-    printSection('Response', 'HTTP ' + (data.status || 200), data.url, data.resHeaders, data.resProtocol, data.resMessageType, data.resData, original, path, fullExpand);
+    printSection('Response', 'HTTP ' + (data.status || 200), data.url, data.resHeaders, data.resProtocol, data.resMessageType, data.resData, original, path, fullExpand, showHeaders);
   }
   if (data.error) console.error('Error:', data.error);
 }
 
-function printSection(title, methodLine, url, headers, protocol, messageType, body, original, path, fullExpand) {
-  console.log('=== ' + title + ' ===');
-  console.log(methodLine + ' ' + (url || ''));
-  if (headers) {
-    for (const [k, v] of Object.entries(headers)) console.log(k + ': ' + v);
+function printSection(title, methodLine, url, headers, protocol, messageType, body, original, path, fullExpand, showHeaders) {
+  const suppressHeader = (path || fullExpand) && !showHeaders;
+  if (!suppressHeader) {
+    console.log('=== ' + title + ' ===');
+    console.log(methodLine + ' ' + (url || ''));
+    if (headers) {
+      for (const [k, v] of Object.entries(headers)) console.log(k + ': ' + v);
+    }
+    console.log('');
   }
-  console.log('');
   if (body) {
     let label;
     if (protocol === 'json') label = title + ' Body (JSON)';

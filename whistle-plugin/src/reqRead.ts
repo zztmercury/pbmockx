@@ -26,7 +26,19 @@ export default (server: any, options: any) => {
     const encoding = reqHeaders['content-encoding'] || '';
     const method = req.originalReq?.method || 'GET';
 
-    let body = await readBody(req);
+    let body: Buffer;
+    try {
+      body = await readBody(req);
+    } catch (e: any) {
+      // Stream errored mid-body — nothing to forward, but must not leave the
+      // pipe hanging (whistle waits for res.end()). Flush empty and bail.
+      flowStore.upsert(sessionId, {
+        url: fullUrl, method, reqHeaders,
+        error: 'reqRead stream failed: ' + (e?.message || e), ts: Date.now(),
+      });
+      try { res.end(); } catch {}
+      return;
+    }
 
     let decompressed = body;
     if (encoding.includes('gzip')) { try { decompressed = zlib.gunzipSync(body); } catch {} }
@@ -34,7 +46,13 @@ export default (server: any, options: any) => {
     else if (encoding.includes('br')) { try { decompressed = zlib.brotliDecompressSync(body); } catch {} }
 
     const info: DetectInfo | null = detect(ct, decompressed);
-    if (!info) { res.end(body); return; }
+    if (!info) {
+      res.end(body);
+      flowStore.upsert(sessionId, {
+        url: fullUrl, method, reqHeaders, reqOriginalRaw: decompressed, ts: Date.now(),
+      });
+      return;
+    }
 
     // Form (urlencoded) bodies: parse for display only, pass through unchanged (no patch).
     if (info.protocol === 'form') {
@@ -53,25 +71,17 @@ export default (server: any, options: any) => {
 
     // 无 patch/map_local(data) 规则时：立即透传原始字节，绝不阻塞转发。
     // 往返会丢弃未知字段/改变字段顺序，字节级改动会破坏依赖原始字节的
-    // 请求签名（如 X-Tap-Sign），导致服务端 400。decode 仅用于展示。
-    // 关键：decode 会触发 desc 下载（DescCache 每次发条件请求，timeout 10s），
-    // 若同步等待会阻塞请求体转发，导致上游等 body 超时（POST 超时、GET 正常）。
+    // 请求签名（如 X-Tap-Sign），导致服务端 400。
+    // 关键：不在此处 decode——decode 会触发 desc 下载 + 同步构建 descriptor
+    // root（实测 775ms），阻塞所有 pipe hook 共享的事件循环，短超时请求会先
+    // 被客户端关闭。改为只记录 raw body，按需在 CGI/CLI 查询时再 decode。
     if (!rules.hasDataRules(fullUrl, info.protocol)) {
       res.end(body);
-      decodeForDisplay(info, decompressed)
-        .then(decoded => {
-          flowStore.upsert(sessionId, {
-            url: fullUrl, method,
-            reqHeaders, reqInfo: info, reqDecoded: decoded, reqOriginalRaw: decompressed,
-            ts: Date.now(),
-          });
-        })
-        .catch(e => {
-          flowStore.upsert(sessionId, {
-            url: fullUrl, method, reqHeaders, reqInfo: info, reqDecoded: null, reqOriginalRaw: decompressed,
-            error: e.message, ts: Date.now(),
-          });
-        });
+      flowStore.upsert(sessionId, {
+        url: fullUrl, method,
+        reqHeaders, reqInfo: info, reqDecoded: null, reqOriginalRaw: decompressed,
+        ts: Date.now(),
+      });
       return;
     }
 

@@ -10,10 +10,17 @@
 export default (server: any, options: any) => {
   server.on('request', (req: any, res: any) => {
     const chunks: Buffer[] = [];
+    let ended = false;
+    const finish = () => {
+      if (ended) return;
+      ended = true;
+      try { res.end(Buffer.concat(chunks)); } catch {}
+    };
     req.on('data', (c: Buffer) => chunks.push(c));
-    req.on('end', () => {
-      const body = Buffer.concat(chunks);
-      res.end(body);
-    });
+    req.on('end', finish);
+    // whistle pipe decoder emits 'close' without 'end' on socket reset/client
+    // disconnect — must still flush so the pipe never hangs.
+    req.on('error', finish);
+    req.on('close', finish);
   });
 };

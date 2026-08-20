@@ -30,7 +30,25 @@ export default (server: any, options: any) => {
     const statusCode = req.originalRes?.statusCode || 200;
     const method = req.originalReq?.method || 'GET';
 
-    let body = await readBody(req);
+    // 立即记录响应元数据（status/headers），即使后续 readBody 失败或 decode
+    // 被跳过，flow 也有响应状态，不会出现 status 空 → 便于定位超时。
+    flowStore.upsert(sessionId, {
+      url: fullUrl, method, status: statusCode, resHeaders, ts: Date.now(),
+    });
+
+    let body: Buffer;
+    try {
+      body = await readBody(req);
+    } catch (e: any) {
+      // Stream errored mid-body — nothing to forward, but must not leave the
+      // pipe hanging (whistle waits for res.end()). Flush empty and bail.
+      flowStore.upsert(sessionId, {
+        url: fullUrl, method, status: statusCode, resHeaders,
+        error: 'resRead stream failed: ' + (e?.message || e), ts: Date.now(),
+      });
+      try { res.end(); } catch {}
+      return;
+    }
 
     let decompressed = body;
     if (encoding.includes('gzip')) { try { decompressed = zlib.gunzipSync(body); } catch {} }
@@ -38,7 +56,14 @@ export default (server: any, options: any) => {
     else if (encoding.includes('br')) { try { decompressed = zlib.brotliDecompressSync(body); } catch {} }
 
     const info: DetectInfo | null = detect(ct, decompressed);
-    if (!info) { res.end(body); return; }
+    if (!info) {
+      res.end(body);
+      flowStore.upsert(sessionId, {
+        url: fullUrl, method, status: statusCode, resHeaders,
+        resOriginalRaw: decompressed, ts: Date.now(),
+      });
+      return;
+    }
 
     // Form (urlencoded) bodies: parse for display only, pass through unchanged (no patch).
     if (info.protocol === 'form') {
@@ -56,25 +81,16 @@ export default (server: any, options: any) => {
     }
 
     // 无 patch/map_local(data) 规则时：立即透传原始字节，绝不阻塞转发。
-    // decode 会触发 desc 下载（DescCache 每次发条件请求，timeout 10s），
-    // 若同步等待会阻塞响应体转发，导致客户端等 body 超时。decode 仅用于展示。
+    // 关键：不在此处 decode——decode 会触发 desc 下载 + 同步构建 descriptor
+    // root（实测 775ms），阻塞所有 pipe hook 共享的事件循环，短超时请求会先
+    // 被客户端关闭。改为只记录 raw body，按需在 CGI/CLI 查询时再 decode。
     if (!rules.hasDataRules(fullUrl, info.protocol)) {
       res.end(body);
-      decodeForDisplay(info, decompressed)
-        .then(decoded => {
-          flowStore.upsert(sessionId, {
-            url: fullUrl, method, status: statusCode,
-            resHeaders, resInfo: info, resDecoded: decoded, resOriginalRaw: decompressed,
-            ts: Date.now(),
-          });
-        })
-        .catch(e => {
-          flowStore.upsert(sessionId, {
-            url: fullUrl, method, status: statusCode,
-            resHeaders, resInfo: info, resDecoded: null, resOriginalRaw: decompressed,
-            error: e.message, ts: Date.now(),
-          });
-        });
+      flowStore.upsert(sessionId, {
+        url: fullUrl, method, status: statusCode,
+        resHeaders, resInfo: info, resDecoded: null, resOriginalRaw: decompressed,
+        ts: Date.now(),
+      });
       return;
     }
 

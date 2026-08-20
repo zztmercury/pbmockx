@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.3] - 2026-08-19
+
+### 修复
+- **PB 请求偶发超时 / POST protobuf 响应丢失**：无规则路径下 decode 虽写成 fire-and-forget，但 `pbEngine.decode()` → `Root.fromDescriptor + resolveAll` 是同步 CPU（实测 775ms），阻塞所有 pipe hook 共享的事件循环，短超时请求先被客户端关闭、resRead 随后被 whistle 跳过，导致响应从未被记录（status 空）。现在无规则路径**彻底移除 decode**：立即透传原始字节 + 只记录 raw body，decode 改为按需（`pbmockx decode` / PBView 查询时再从 raw body 解析），descriptor 构建从请求路径移到查询路径。同时 resRead 入口立即写 status/headers，补 detect-null/error 分支记录，避免 status 空。
+- **`readBody` 永久挂起导致请求卡死**：whistle pipe 的 decoder 在 socket reset / 客户端断开时只发 `close`（不发 `end`/`error`），`readBody` 未监听 `close` 导致 Promise 永不 resolve、`res.end()` 永不调用。现在 `readBody` 监听 `close`：`readableEnded` 视为正常结束，否则 reject 并记录 abort；`resWrite`/`reqWrite` 也补 `error`/`close` 兜底。
+- **`.desc` 下载惊群**：TTL 过期瞬间 N 个并发请求各自发条件请求 + 重建 root。现在 `DescCache` 加 in-flight 去重，同 URL 只发一次网络请求。
+
+### 变更
+- **`decode` 命令新增 `--headers`**：带 `--path`/`--full` 时默认省略 method/url/headers（省 token），加 `--headers` 找回。
+
 ## [0.6.2] - 2026-08-19
 
 ### 修复

@@ -38,6 +38,7 @@ const DEFAULT_TTL_MS = 300 * 1000; // 300s
 
 export class DescCache {
   private cache = new Map<string, CacheEntry>();
+  private inflight = new Map<string, Promise<DescResult>>();
   private cacheDir: string | null;
   private ttlMs: number;
 
@@ -60,6 +61,25 @@ export class DescCache {
     if (entry && now - entry.ts < this.ttlMs) {
       return { bytes: entry.bytes, changed: false };
     }
+
+    // TTL expired (or no entry): dedupe concurrent refreshes of the same URL.
+    // Without this, N simultaneous requests all fire a conditional HTTP request
+    // the instant the TTL lapses (thundering herd), and each rebuilds the root.
+    const existing = this.inflight.get(url);
+    if (existing) return existing;
+
+    const p = this._refresh(url, entry);
+    this.inflight.set(url, p);
+    try {
+      return await p;
+    } finally {
+      this.inflight.delete(url);
+    }
+  }
+
+  /** Conditional (or fresh) network fetch with stale-fallback semantics. */
+  private async _refresh(url: string, entry: CacheEntry | null): Promise<DescResult> {
+    const now = Date.now();
 
     const headers: Record<string, string> = {};
     if (entry) {

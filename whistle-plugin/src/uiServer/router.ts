@@ -83,9 +83,11 @@ export default function setupRouter(router: Router) {
     };
 
     // Request data
-    if (rec.reqInfo && (rec.reqDecoded || original)) {
+    if (rec.reqInfo && (rec.reqDecoded != null || rec.reqOriginalRaw)) {
       const reqInfo = rec.reqInfo;
-      const reqData = original && rec.reqOriginalRaw ? await tryDecode(reqInfo, rec.reqOriginalRaw) : rec.reqDecoded;
+      const reqData = (!original && rec.reqDecoded != null)
+        ? rec.reqDecoded
+        : (rec.reqOriginalRaw ? await tryDecode(reqInfo, rec.reqOriginalRaw) : null);
       if (reqInfo.protocol === 'protobuf' && reqData && reqInfo.desc && reqInfo.messageType) {
         try {
           const MsgType = await pbEngine.getMessageType(reqInfo.desc, reqInfo.messageType);
@@ -100,9 +102,11 @@ export default function setupRouter(router: Router) {
     }
 
     // Response data
-    if (rec.resInfo && (rec.resDecoded || original)) {
+    if (rec.resInfo && (rec.resDecoded != null || rec.resOriginalRaw)) {
       const resInfo = rec.resInfo;
-      const resData = original && rec.resOriginalRaw ? await tryDecode(resInfo, rec.resOriginalRaw) : rec.resDecoded;
+      const resData = (!original && rec.resDecoded != null)
+        ? rec.resDecoded
+        : (rec.resOriginalRaw ? await tryDecode(resInfo, rec.resOriginalRaw) : null);
       if (resInfo.protocol === 'protobuf' && resData && resInfo.desc && resInfo.messageType) {
         try {
           const MsgType = await pbEngine.getMessageType(resInfo.desc, resInfo.messageType);
