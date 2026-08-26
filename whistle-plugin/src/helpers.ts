@@ -53,6 +53,49 @@ export function readBody(req: any): Promise<Buffer> {
 }
 
 /**
+ * 结束 whistle pipe 的 encoder。必须 write(chunk) + write(empty) + end()，
+ * 不能 end(chunk)。
+ *
+ * whistle 的 getEncodeTransform（objectMode, highWaterMark:0）覆写了 end：
+ *   end(chunk) { this.end_(() => { push_(pack(chunk)); push_(pack()); }); }
+ * 把 body 和终止帧 `\n0\n` 都放到 writable finish 回调里。Node Transform
+ * 会在 finish 之前 _flush → push(null) 结束 readable，finish 里再 push
+ * 会被丢弃。表现：reqRead 已 forwarded，reqWrite 永远等不到终止帧，
+ * 上游收不到完整请求，resRead 进不来。空 body 的 end() 同样会丢终止帧。
+ *
+ * write(chunk) 走 _transform → pack(chunk)；write(empty Buffer) 被 pack
+ * 成 `\n0\n`（len=0），终止帧在 end 之前就进管道。end() 即使再丢一次
+ * 终止帧也不影响。
+ */
+export function endPipe(res: any, body?: Buffer | null): void {
+  try {
+    if (body && body.length) res.write(body);
+    res.write(Buffer.alloc(0));
+    res.end();
+  } catch {}
+}
+
+/**
+ * SSE / 长连接透传：按 chunk write，不 buffer 整段 body。
+ * 不能 req.pipe(res)——whistle encoder 的 end(chunk) 会丢终止帧（见 endPipe）。
+ * 只在 end/error 关流；close 在 SSE 存活期间也会发，不能当结束。
+ */
+export function passthroughPipe(req: any, res: any): void {
+  let ended = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    endPipe(res);
+  };
+  req.on('data', (c: Buffer) => {
+    if (ended) return;
+    try { res.write(c); } catch { finish(); }
+  });
+  req.on('end', finish);
+  req.on('error', finish);
+}
+
+/**
  * 关键路径日志：记录 pipe hook 请求/响应的到达、读取、转发时刻与耗时。
  * 用于定位超时——通过 req 的 forwarded 与 res 的 begin 时间戳差，可算出
  * 服务器处理耗时；若 res 无日志，说明响应未到达 resRead（客户端已断开）。

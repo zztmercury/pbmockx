@@ -3,9 +3,9 @@
  * Stores request data into flow_store (upsert — merges with response if exists).
  */
 
-import { detect, parseForm, type DetectInfo } from './content-type';
+import { detect, parseForm, isSse, type DetectInfo } from './content-type';
 import { pbEngine, rules, flowStore } from './ctx';
-import { readBody, cloneData, pipeLog } from './helpers';
+import { readBody, cloneData, pipeLog, endPipe, passthroughPipe } from './helpers';
 import * as zlib from 'zlib';
 
 /** 仅用于展示的解码（不阻塞转发）。protobuf 需 desc 下载，放异步。 */
@@ -30,6 +30,15 @@ export default (server: any, options: any) => {
 
     pipeLog('req', sessionId, `begin ${method} ${shortUrl}`);
 
+    if (isSse(reqHeaders)) {
+      pipeLog('req', sessionId, '-> sse-passthrough');
+      flowStore.upsert(sessionId, {
+        url: fullUrl, method, reqHeaders, ts: Date.now(),
+      });
+      passthroughPipe(req, res);
+      return;
+    }
+
     let body: Buffer;
     try {
       body = await readBody(req);
@@ -41,7 +50,7 @@ export default (server: any, options: any) => {
         url: fullUrl, method, reqHeaders,
         error: 'reqRead stream failed: ' + (e?.message || e), ts: Date.now(),
       });
-      try { res.end(); } catch {}
+      endPipe(res);
       return;
     }
     pipeLog('req', sessionId, `body-read ${body.length}B read=${Date.now() - t0}ms`);
@@ -53,7 +62,7 @@ export default (server: any, options: any) => {
 
     const info: DetectInfo | null = detect(ct, decompressed);
     if (!info) {
-      res.end(body);
+      endPipe(res, body);
       flowStore.upsert(sessionId, {
         url: fullUrl, method, reqHeaders, reqOriginalRaw: decompressed, ts: Date.now(),
       });
@@ -64,7 +73,7 @@ export default (server: any, options: any) => {
     // Form (urlencoded) bodies: parse for display only, pass through unchanged (no patch).
     if (info.protocol === 'form') {
       // 立即转发，不阻塞；解析仅用于展示。
-      res.end(body);
+      endPipe(res, body);
       let parsed: any = null;
       try { parsed = parseForm(decompressed); }
       catch (e: any) { console.error('[pbmockx] reqRead form parse error ' + fullUrl + ':', e.message); }
@@ -84,7 +93,7 @@ export default (server: any, options: any) => {
     // root（实测 775ms），阻塞所有 pipe hook 共享的事件循环，短超时请求会先
     // 被客户端关闭。改为只记录 raw body，按需在 CGI/CLI 查询时再 decode。
     if (!rules.hasDataRules(fullUrl, info.protocol)) {
-      res.end(body);
+      endPipe(res, body);
       flowStore.upsert(sessionId, {
         url: fullUrl, method,
         reqHeaders, reqInfo: info, reqDecoded: null, reqOriginalRaw: decompressed,
@@ -97,7 +106,7 @@ export default (server: any, options: any) => {
     // 有 patch/map_local(data) 规则：必须 decode → patch → encode 后转发。
     try {
       let decoded: any = await decodeForDisplay(info, decompressed);
-      if (decoded == null) { res.end(body); return; }
+      if (decoded == null) { endPipe(res, body); return; }
 
       const patched = rules.apply(fullUrl, info.protocol, decoded);
 
@@ -114,7 +123,7 @@ export default (server: any, options: any) => {
         ts: Date.now(),
       });
 
-      res.end(encoded);
+      endPipe(res, encoded);
       pipeLog('req', sessionId, `-> patched ${encoded.length}B total=${Date.now() - t0}ms`);
     } catch (e: any) {
       console.error('[pbmockx] reqRead error ' + fullUrl + ':', e.message);
@@ -123,7 +132,7 @@ export default (server: any, options: any) => {
         error: e.message, ts: Date.now(),
       });
       pipeLog('req', sessionId, `-> error ${e.message} total=${Date.now() - t0}ms`);
-      res.end(body);
+      endPipe(res, body);
     }
   });
 };

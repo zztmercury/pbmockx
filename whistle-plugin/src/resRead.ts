@@ -5,9 +5,9 @@
  * In pipe resRead, response headers are in req.headers (not req.originalRes.headers).
  */
 
-import { detect, parseForm, type DetectInfo } from './content-type';
+import { detect, parseForm, isSse, type DetectInfo } from './content-type';
 import { pbEngine, rules, flowStore } from './ctx';
-import { readBody, cloneData, pipeLog } from './helpers';
+import { readBody, cloneData, pipeLog, endPipe, passthroughPipe } from './helpers';
 import { expandAny, packAny } from './any-expand';
 import * as zlib from 'zlib';
 
@@ -40,6 +40,12 @@ export default (server: any, options: any) => {
       url: fullUrl, method, status: statusCode, resHeaders, ts: Date.now(),
     });
 
+    if (isSse(resHeaders)) {
+      pipeLog('res', sessionId, '-> sse-passthrough');
+      passthroughPipe(req, res);
+      return;
+    }
+
     let body: Buffer;
     try {
       body = await readBody(req);
@@ -51,7 +57,7 @@ export default (server: any, options: any) => {
         url: fullUrl, method, status: statusCode, resHeaders,
         error: 'resRead stream failed: ' + (e?.message || e), ts: Date.now(),
       });
-      try { res.end(); } catch {}
+      endPipe(res);
       return;
     }
     pipeLog('res', sessionId, `body-read ${body.length}B read=${Date.now() - t0}ms`);
@@ -63,7 +69,7 @@ export default (server: any, options: any) => {
 
     const info: DetectInfo | null = detect(ct, decompressed);
     if (!info) {
-      res.end(body);
+      endPipe(res, body);
       flowStore.upsert(sessionId, {
         url: fullUrl, method, status: statusCode, resHeaders,
         resOriginalRaw: decompressed, ts: Date.now(),
@@ -75,7 +81,7 @@ export default (server: any, options: any) => {
     // Form (urlencoded) bodies: parse for display only, pass through unchanged (no patch).
     if (info.protocol === 'form') {
       // 立即转发，不阻塞；解析仅用于展示。
-      res.end(body);
+      endPipe(res, body);
       let parsed: any = null;
       try { parsed = parseForm(decompressed); }
       catch (e: any) { console.error('[pbmockx] resRead form parse error ' + fullUrl + ':', e.message); }
@@ -93,7 +99,7 @@ export default (server: any, options: any) => {
     // root（实测 775ms），阻塞所有 pipe hook 共享的事件循环，短超时请求会先
     // 被客户端关闭。改为只记录 raw body，按需在 CGI/CLI 查询时再 decode。
     if (!rules.hasDataRules(fullUrl, info.protocol)) {
-      res.end(body);
+      endPipe(res, body);
       flowStore.upsert(sessionId, {
         url: fullUrl, method, status: statusCode,
         resHeaders, resInfo: info, resDecoded: null, resOriginalRaw: decompressed,
@@ -106,7 +112,7 @@ export default (server: any, options: any) => {
     // 有 patch/map_local(data) 规则：必须 decode → patch → encode 后转发。
     try {
       let decoded: any = await decodeForDisplay(info, decompressed);
-      if (decoded == null) { res.end(body); return; }
+      if (decoded == null) { endPipe(res, body); return; }
 
       // Expand Any fields so patch path can navigate through them
       if (info.protocol === 'protobuf' && info.desc && info.messageType) {
@@ -139,7 +145,7 @@ export default (server: any, options: any) => {
         ts: Date.now(),
       });
 
-      res.end(encoded);
+      endPipe(res, encoded);
       pipeLog('res', sessionId, `-> patched ${encoded.length}B total=${Date.now() - t0}ms`);
     } catch (e: any) {
       console.error('[pbmockx] resRead error ' + fullUrl + ':', e.message);
@@ -149,7 +155,7 @@ export default (server: any, options: any) => {
         error: e.message, ts: Date.now(),
       });
       pipeLog('res', sessionId, `-> error ${e.message} total=${Date.now() - t0}ms`);
-      res.end(body);
+      endPipe(res, body);
     }
   });
 };

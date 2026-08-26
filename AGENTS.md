@@ -115,6 +115,8 @@ resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 
 - **resRead**：响应头在 `req.headers`（`req.originalRes.headers` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**——别去 `req.originalRes.headers` 拿 content-type/encoding）。响应体通过 `req` stream 传入（pipe hook 把它当作 HTTP 请求 body 接收）。
 - **reqRead**：请求头在 `req.headers`，请求体通过 `req` stream 传入。
 - 读 body 用 `readBody(req)`（`src/helpers.ts`），聚合 chunk 后返回 Buffer。
+- **结束 pipe 必须用 `endPipe(res, body)`，不能 `res.end(body)`**：whistle `getEncodeTransform` 覆写 `Transform.end`，把 body 和 `\n0\n` 终止帧放到 finish 回调；Node 先 `_flush → push(null)` 再跑 finish，终止帧偶发被丢 → reqRead 已 forwarded、reqWrite 挂死。`endPipe` 用 `write(body)+write(empty)+end()` 让终止帧走 `_transform`。
+- **SSE 不能 `readBody`**：`Content-Type` / `Accept` 含 `text/event-stream` 时走 `passthroughPipe`（按 chunk `write`），否则会等流结束才转发、客户端收不到事件。
 
 ### gzip/deflate/br 必须先解压再 decode
 pipe hook 在 decode 前按 `content-encoding` 用 `zlib.gunzipSync`/`inflateSync`/`brotliDecompressSync` 解压。**encode 后返回 UNCOMPRESSED body（不重新压缩）**——whistle pipe（方案二）把它当 plaintext 处理，自动剥离 `content-encoding`，所以客户端和 Web UI 看到的都是原始字节。如果跳过解压直接 decode，gzip 流会被当成 PB 解析失败。

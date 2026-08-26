@@ -6,6 +6,7 @@
 
 const PB_CT_RE = /application\/x-(google-)?protobuf/i;
 const FORM_CT_RE = /application\/x-www-form-urlencoded/i;
+const SSE_RE = /text\/event-stream/i;
 
 const DESC_RE = /desc\s*=\s*"([^"]+)"/i;
 const DESC_RE_BARE = /desc\s*=\s*([^\s;]+)/i;
@@ -47,6 +48,15 @@ export function isJson(ct: string, data: Buffer): boolean {
 
 export function isForm(ct: string): boolean {
   return !!ct && FORM_CT_RE.test(ct);
+}
+
+/** SSE: Content-Type 或 Accept 含 text/event-stream。长连接，不能 buffer。 */
+export function isSse(headers: Record<string, any> | string | null | undefined): boolean {
+  if (!headers) return false;
+  if (typeof headers === 'string') return SSE_RE.test(headers);
+  const ct = headers['content-type'] || headers['Content-Type'] || '';
+  const accept = headers['accept'] || headers['Accept'] || '';
+  return SSE_RE.test(ct) || SSE_RE.test(accept);
 }
 
 /** Parse urlencoded body into an object. Repeated keys collapse to an array. */
