@@ -14,15 +14,16 @@ set -euo pipefail
 #   render but stay invisible. Built-in tabs (Raw/Headers/...) are unaffected.
 #
 # This script:
-#   1. Locates the installed whistle bundle
+#   1. Locates the installed whistle
 #   2. Reads the whistle version
-#   3. Version < 2.10.8 → no patch needed (bug not present)
-#   4. Version >= 2.10.8 → patch if the known buggy pattern is present
-#   5. Idempotent: already-patched bundles are left alone; if the bundle has
-#      neither pattern (upstream fixed/restructured), skip with a warning.
+#   3. Patch 1 (frontend, >= 2.10.8 only): inspector-tab hidden bug
+#   4. Patch 2 (all versions): load-plugin.js destroy-on-end
+#   5. Patch 3 (all versions): h2.js closed-session reuse
+#   6. Idempotent: already-patched files are left alone; missing patterns
+#      skip with a warning. Each patch is independent.
 #
-# Safe to re-run (e.g. after `npm i -g whistle` upgrades). Backs up the
-# original bundle to index.js.pbmockx-bak on first patch.
+# Safe to re-run (e.g. after `npm i -g whistle` upgrades). Backs up originals
+# to *.pbmockx-bak / *.pbmockx-pipe-bak / *.pbmockx-h2-bak on first patch.
 
 # --- Colors ---
 if [ -t 1 ]; then
@@ -56,11 +57,7 @@ if [ -L "$W2_BIN" ]; then
 fi
 WHISTLE_ROOT="$(cd "$(dirname "$W2_REAL")/.." 2>/dev/null && pwd)"
 BUNDLE="$WHISTLE_ROOT/biz/webui/htdocs/js/index.js"
-
-if [ ! -f "$BUNDLE" ]; then
-    err "whistle bundle not found: $BUNDLE"
-    exit 1
-fi
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # --- Read whistle version ---
 W2_VERSION="$(w2 --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")"
@@ -85,6 +82,9 @@ fi
 # The node script prints a status word on stdout and always exits 0, so
 # `set -e` never trips on a non-zero exit. Result is captured via output.
 if [ "$NEED_PATCH" != "no" ]; then
+if [ ! -f "$BUNDLE" ]; then
+    warn "whistle frontend bundle not found: $BUNDLE — skip inspector-tab patch"
+else
 PATCH_STATUS=$(node -e "
 const fs = require('fs');
 const F = process.argv[1];
@@ -123,83 +123,61 @@ case "$PATCH_STATUS" in
         ;;
 esac
 fi
+fi
 
 # --- Patch 2: pipe CONNECT socket destroy-on-end ---
-# whistle emitHttpPipe does socket.on('end', destroySocket). When the plugin
-# writes the body + \n0\n terminator in that same 'end' turn, Node may still
-# have unflushed bytes; destroy() sends RST and reqWrite never sees the body
-# (logs: endPipe + encoder-finish, no write-begin). Wait for encoder 'finish'
-# before destroying.
+# emitHttpPipe used socket.on('end', destroySocket). Incoming FIN must not
+# RST the writable side; encoder.pipe(socket) already ends it when the
+# encoder readable finishes.
 PLUGIN_JS="$WHISTLE_ROOT/lib/plugins/load-plugin.js"
 if [ ! -f "$PLUGIN_JS" ]; then
     warn "load-plugin.js not found: $PLUGIN_JS — skip pipe patch"
-    exit 0
+else
+    PIPE_STATUS=$(node "$SCRIPT_DIR/patch-whistle-pipe.js" "$PLUGIN_JS")
+    case "$PIPE_STATUS" in
+        already-patched)
+            ok "whistle pipe socket already patched (no destroy on incoming end)"
+            ;;
+        patched|upgraded)
+            ok "whistle pipe socket patched (no destroy on incoming end)"
+            info "Restart whistle to pick up changes: w2 restart"
+            ;;
+        pattern-not-found)
+            warn "load-plugin.js pipe pattern not found — skip (upstream may have changed)"
+            ;;
+        *)
+            err "pipe patch failed (unexpected status: $PIPE_STATUS)"
+            exit 1
+            ;;
+    esac
 fi
 
-PIPE_STATUS=$(node -e "
-const fs = require('fs');
-const F = process.argv[1];
-let s = fs.readFileSync(F, 'utf8');
-const MARKER = '[wpipe:';
-const ORIG = \"            socket.pipe(decoder);\\n            encoder.pipe(socket);\\n            socket.on('end', destroySocket);\\n            httpServer.emit('request', decoder, encoder);\";
-const V1 = \"            socket.pipe(decoder);\\n            encoder.pipe(socket);\\n            // pbmockx: wait for encoder flush before destroying the CONNECT\\n            // socket. Immediate destroy() on 'end' RSTs unflushed bytes, so\\n            // reqWrite never sees the body (endPipe + encoder-finish, no write-begin).\\n            socket.on('end', function () {\\n              if (encoder._writableState && encoder._writableState.finished) {\\n                return destroySocket.call(this);\\n              }\\n              encoder.once('finish', destroySocket.bind(this));\\n            });\\n            httpServer.emit('request', decoder, encoder);\";
-const NEW = \"            socket.pipe(decoder);\\n            encoder.pipe(socket);\\n            socket.on('end', function () {\\n              var sock = this;\\n              var closeSock = function () {\\n                process.nextTick(function () {\\n                  if (!sock.destroyed && sock.writable) sock.end();\\n                });\\n              };\\n              if (encoder._writableState && encoder._writableState.finished) {\\n                return closeSock();\\n              }\\n              encoder.once('finish', closeSock);\\n            });\\n            httpServer.emit('request', decoder, encoder);\";
-if (s.includes(MARKER)) { console.log('already-patched'); process.exit(0); }
-const bak = F + '.pbmockx-pipe-bak';
-if (!fs.existsSync(bak)) fs.copyFileSync(F, bak);
-if (s.includes(V1)) { fs.writeFileSync(F, s.replace(V1, NEW)); console.log('upgraded'); process.exit(0); }
-if (s.includes(ORIG)) { fs.writeFileSync(F, s.replace(ORIG, NEW)); console.log('patched'); process.exit(0); }
-console.log('pattern-not-found');
-" "$PLUGIN_JS")
-
-case "$PIPE_STATUS" in
-    already-patched)
-        ok "whistle pipe socket already patched (end after encoder flush)"
-        ;;
-    patched|upgraded)
-        ok "whistle pipe socket patched (end after encoder flush, no RST)"
-        info "Restart whistle to pick up changes: w2 restart"
-        ;;
-    pattern-not-found)
-        warn "load-plugin.js pipe pattern not found — skip (upstream may have changed)"
-        ;;
-    *)
-        err "pipe patch failed (unexpected status: $PIPE_STATUS)"
-        exit 1
-        ;;
-esac
-
 # --- Patch 3: HTTP/2 session reuse after close ---
-# whistle caches Http2Session in clients[name] and reuses it without checking
-# closed/destroyed. A dead session then client.request() throws (sync) or
-# emits ERR_HTTP2_INVALID_SESSION (async). Sync throw falls back to HTTP/1.1;
-# async error hits req.on('error') → abort() → _closed, which also destroys
-# in-flight plugin pipe CONNECTs. Drop dead sessions, and on H2 errors drop
-# the cache entry and callback() so the request retries over HTTP/1.1.
+# Cache lookup skipped closed sessions. Async ERR_HTTP2_INVALID_SESSION used
+# to abort the whole client request (and in-flight pipe CONNECTs). Evict dead
+# sessions; GET-like requests may fall back to HTTP/1.1; POSTs already on the
+# wire get 502 instead of a replayed body.
 H2_JS="$WHISTLE_ROOT/lib/https/h2.js"
 if [ ! -f "$H2_JS" ]; then
     warn "h2.js not found: $H2_JS — skip H2 session patch"
-    exit 0
+else
+    H2_STATUS=$(node "$SCRIPT_DIR/patch-whistle-h2.js" "$H2_JS")
+    case "$H2_STATUS" in
+        already-patched)
+            ok "whistle H2 session already patched (evict dead sessions; no POST replay)"
+            ;;
+        patched)
+            ok "whistle H2 session patched (evict dead sessions; no POST replay)"
+            info "Restart whistle to pick up changes: w2 restart"
+            ;;
+        pattern-not-found)
+            warn "h2.js pattern not found — skip (upstream may have changed)"
+            ;;
+        *)
+            err "H2 patch failed (unexpected status: $H2_STATUS)"
+            exit 1
+            ;;
+    esac
 fi
-
-H2_PATCH="$(cd "$(dirname "$0")" && pwd)/patch-whistle-h2.js"
-H2_STATUS=$(node "$H2_PATCH" "$H2_JS")
-
-case "$H2_STATUS" in
-    already-patched)
-        ok "whistle H2 session already patched (drop closed sessions, fallback HTTP/1.1)"
-        ;;
-    patched)
-        ok "whistle H2 session patched (drop closed sessions, fallback HTTP/1.1)"
-        info "Restart whistle to pick up changes: w2 restart"
-        ;;
-    pattern-not-found)
-        warn "h2.js pattern not found — skip (upstream may have changed)"
-        ;;
-    *)
-        err "H2 patch failed (unexpected status: $H2_STATUS)"
-        exit 1
-        ;;
-esac
 
 exit 0
