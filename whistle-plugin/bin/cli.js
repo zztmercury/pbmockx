@@ -807,8 +807,8 @@ async function cmd_fix(args) {
     process.exit(1);
   }
 
-  // Step 3: Patch whistle frontend (custom inspector-tab hidden bug, >= 2.10.8)
-  console.log('[3/4] Checking whistle frontend patch...');
+  // Step 3: Patch whistle (inspector tab + pipe socket + H2 session)
+  console.log('[3/4] Checking whistle patches...');
   const patchScript = path.join(PROJECT_ROOT, 'scripts', 'patch-whistle.sh');
   if (fs.existsSync(patchScript)) {
     try {

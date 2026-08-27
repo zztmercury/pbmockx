@@ -168,8 +168,8 @@ else
     warn "pbmockx not in PATH. Use: w2 exec pbmockx <command>"
 fi
 
-# --- Step 6: Patch whistle frontend (custom inspector-tab hidden bug, >= 2.10.8) ---
-info "Checking whistle frontend patch..."
+# --- Step 6: Patch whistle (inspector tab + pipe socket + H2 session) ---
+info "Checking whistle patches..."
 if [ -f "$PROJECT_ROOT/scripts/patch-whistle.sh" ]; then
     bash "$PROJECT_ROOT/scripts/patch-whistle.sh" || warn "whistle patch failed (non-fatal)"
 else

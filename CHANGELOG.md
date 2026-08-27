@@ -5,14 +5,18 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.5] - 2026-08-27
+
+### 修复
+- **偶发 POST 无响应**：whistle 复用已关闭的 HTTP/2 session（`ERR_HTTP2_INVALID_SESSION`）会 abort 整次请求，并把还在握手的 pipe CONNECT 一起拆掉。`scripts/patch-whistle.sh` 丢掉死 session，H2 错误时回退 HTTP/1.1；pipe CONNECT 在 encoder flush 后 `end()`，不再立刻 `destroy()`（会 RST 未刷出的字节）。`w2` 升级后需重跑补丁。
+
+### 变更
+- 去掉对上述问题无效的 pipe 终止帧 workaround 与默认开启的诊断日志。
+
 ## [0.6.4] - 2026-08-26
 
 ### 修复
-- **POST 偶发超时（resRead 从未到达）**：whistle pipe encoder 覆写 `Transform.end`，把 body 和 `\n0\n` 终止帧都放到 writable finish 回调里；Node Transform 在 finish 之前 `_flush → push(null)` 结束 readable，终止帧偶发被丢。表现：reqRead 已 `forwarded`，reqWrite 永远等不到终止帧，上游收不到完整请求。现在所有 pipe hook 用 `endPipe`：`write(body)` + `write(empty)` 走 `_transform` 发终止帧，再 `end()`。
 - **SSE 被整段缓冲**：`text/event-stream` 走 `readBody` 等流结束才转发，客户端收不到任何事件。`Content-Type` / `Accept` 含 `text/event-stream` 时按 chunk 透传（`passthroughPipe`），不 buffer。
-
-### 变更
-- pipe 诊断日志默认开（写 `~/.pbmockx/pipe.log`）；请求方向 pipe 默认启用。
 
 ## [0.6.3] - 2026-08-19
 

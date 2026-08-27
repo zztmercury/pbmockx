@@ -12,8 +12,6 @@ import { parsePath, setByPath, getByPath, appendByPath, insertByPath, removeByPa
 import { MockRule, RuleEngine } from '../src/rules';
 import { isPb, isJson, isForm, isSse, parseForm, parseCtParams, detect } from '../src/content-type';
 import { buildFieldTree, renderTree } from '../src/field-tree';
-import { endPipe } from '../src/helpers';
-import { Transform } from 'stream';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -458,78 +456,6 @@ test('parseDevices parses adb devices output', () => {
   assert.deepStrictEqual(cli.parseDevices('List of devices attached\n'), []);
   assert.deepStrictEqual(cli.parseDevices(''), []);
   return Promise.resolve();
-});
-
-// --- whistle pipe encoder framing ---
-
-function makeWhistleEncodeTransform(): Transform {
-  const OPTIONS = { highWaterMark: 0, objectMode: true };
-  const LF = Buffer.from('\n');
-  const pack = (data?: Buffer) => {
-    if (!data) return Buffer.from('\n0\n');
-    return Buffer.concat([Buffer.from('\n' + data.length + '\n'), data]);
-  };
-  const trans: any = new Transform(OPTIONS);
-  trans._transform = function (chunk: any, _: any, cb: any) {
-    cb(null, pack(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
-  };
-  trans.push_ = trans.push;
-  trans.push = function (chunk: any, encoding?: any) {
-    if (chunk) return trans.push_(chunk, encoding);
-  };
-  trans.end_ = trans.end;
-  trans.end = function (chunk?: any) {
-    return trans.end_(function () {
-      chunk && trans.push_(pack(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
-      trans.push_(pack());
-    });
-  };
-  return trans;
-}
-
-function collectFrames(stream: Transform, timeoutMs = 200): Promise<Buffer[]> {
-  return new Promise((resolve, reject) => {
-    const frames: Buffer[] = [];
-    const timer = setTimeout(() => resolve(frames), timeoutMs);
-    stream.on('data', (c: Buffer) => frames.push(c));
-    stream.on('end', () => { clearTimeout(timer); resolve(frames); });
-    stream.on('error', (e) => { clearTimeout(timer); reject(e); });
-  });
-}
-
-function hasTerminator(frames: Buffer[]): boolean {
-  return frames.some((f) => f.equals(Buffer.from('\n0\n')));
-}
-
-test('endPipe writes terminator through whistle encode transform (non-empty body)', async () => {
-  const enc = makeWhistleEncodeTransform();
-  const got = collectFrames(enc);
-  endPipe(enc, Buffer.from('abc'));
-  const frames = await got;
-  assert.ok(hasTerminator(frames), 'expected \\n0\\n terminator, got ' + JSON.stringify(frames.map((f) => f.toString())));
-  const body = Buffer.concat(frames.filter((f) => !f.equals(Buffer.from('\n0\n'))));
-  assert.ok(body.includes(Buffer.from('abc')), 'body missing from frames');
-});
-
-test('endPipe writes terminator through whistle encode transform (empty body)', async () => {
-  const enc = makeWhistleEncodeTransform();
-  const got = collectFrames(enc);
-  endPipe(enc);
-  const frames = await got;
-  assert.ok(hasTerminator(frames), 'empty body still needs \\n0\\n terminator');
-});
-
-test('endPipe still terminates when destination is paused (highWaterMark:0)', async () => {
-  const enc = makeWhistleEncodeTransform();
-  const dest = new Transform({ highWaterMark: 0, transform(c, _, cb) { cb(null, c); } });
-  dest.pause();
-  enc.pipe(dest);
-  const got = collectFrames(dest);
-  endPipe(enc, Buffer.from('abc'));
-  // Delayed reader: the race that used to drop \\n0\\n from end(chunk).
-  setTimeout(() => dest.resume(), 20);
-  const frames = await got;
-  assert.ok(hasTerminator(frames), 'terminator must survive paused destination');
 });
 
 // --- Run ---

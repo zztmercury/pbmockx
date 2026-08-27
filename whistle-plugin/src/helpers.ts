@@ -3,9 +3,6 @@
  */
 
 import * as crypto from 'crypto';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 
 /** Read all data from a readable stream into a Buffer. */
 export function readBody(req: any): Promise<Buffer> {
@@ -53,31 +50,7 @@ export function readBody(req: any): Promise<Buffer> {
 }
 
 /**
- * 结束 whistle pipe 的 encoder。必须 write(chunk) + write(empty) + end()，
- * 不能 end(chunk)。
- *
- * whistle 的 getEncodeTransform（objectMode, highWaterMark:0）覆写了 end：
- *   end(chunk) { this.end_(() => { push_(pack(chunk)); push_(pack()); }); }
- * 把 body 和终止帧 `\n0\n` 都放到 writable finish 回调里。Node Transform
- * 会在 finish 之前 _flush → push(null) 结束 readable，finish 里再 push
- * 会被丢弃。表现：reqRead 已 forwarded，reqWrite 永远等不到终止帧，
- * 上游收不到完整请求，resRead 进不来。空 body 的 end() 同样会丢终止帧。
- *
- * write(chunk) 走 _transform → pack(chunk)；write(empty Buffer) 被 pack
- * 成 `\n0\n`（len=0），终止帧在 end 之前就进管道。end() 即使再丢一次
- * 终止帧也不影响。
- */
-export function endPipe(res: any, body?: Buffer | null): void {
-  try {
-    if (body && body.length) res.write(body);
-    res.write(Buffer.alloc(0));
-    res.end();
-  } catch {}
-}
-
-/**
  * SSE / 长连接透传：按 chunk write，不 buffer 整段 body。
- * 不能 req.pipe(res)——whistle encoder 的 end(chunk) 会丢终止帧（见 endPipe）。
  * 只在 end/error 关流；close 在 SSE 存活期间也会发，不能当结束。
  */
 export function passthroughPipe(req: any, res: any): void {
@@ -85,7 +58,7 @@ export function passthroughPipe(req: any, res: any): void {
   const finish = () => {
     if (ended) return;
     ended = true;
-    endPipe(res);
+    try { res.end(); } catch {}
   };
   req.on('data', (c: Buffer) => {
     if (ended) return;
@@ -93,28 +66,6 @@ export function passthroughPipe(req: any, res: any): void {
   });
   req.on('end', finish);
   req.on('error', finish);
-}
-
-/**
- * 关键路径日志：记录 pipe hook 请求/响应的到达、读取、转发时刻与耗时。
- * 用于定位超时——通过 req 的 forwarded 与 res 的 begin 时间戳差，可算出
- * 服务器处理耗时；若 res 无日志，说明响应未到达 resRead（客户端已断开）。
- * 格式：[pbmockx:<dir>] HH:MM:SS.mmm <sessionId> <msg>
- *
- * 注意：whistle daemon 把插件进程的 stdout 重定向到 /dev/null，console.log
- * 会被丢弃；stderr 也不可靠。所以这里直接用 appendFileSync 写独立日志文件
- * （同步写保证并发下日志顺序正确，便于算时序；仅诊断期启用，用后应移除）。
- */
-const PIPE_LOG_FILE = path.join(os.homedir(), '.pbmockx', 'pipe.log');
-// 诊断日志开关：默认开（写 ~/.pbmockx/pipe.log）。定位偶发超时时直接看日志；
-// 确认无问题后可置 false 关闭（appendFileSync 同步 IO 会拖慢高 QPS）。
-const PIPE_LOG_ENABLED = true;
-export function pipeLog(dir: 'req' | 'res', sessionId: string, msg: string): void {
-  if (!PIPE_LOG_ENABLED) return;
-  const ts = new Date().toISOString().slice(11, 23);
-  try {
-    fs.appendFileSync(PIPE_LOG_FILE, `[pbmockx:${dir}] ${ts} ${sessionId} ${msg}\n`);
-  } catch {}
 }
 
 /** Generate a short flow ID. */

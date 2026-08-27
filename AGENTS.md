@@ -115,7 +115,8 @@ resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 
 - **resRead**：响应头在 `req.headers`（`req.originalRes.headers` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**——别去 `req.originalRes.headers` 拿 content-type/encoding）。响应体通过 `req` stream 传入（pipe hook 把它当作 HTTP 请求 body 接收）。
 - **reqRead**：请求头在 `req.headers`，请求体通过 `req` stream 传入。
 - 读 body 用 `readBody(req)`（`src/helpers.ts`），聚合 chunk 后返回 Buffer。
-- **结束 pipe 必须用 `endPipe(res, body)`，不能 `res.end(body)`**：whistle `getEncodeTransform` 覆写 `Transform.end`，把 body 和 `\n0\n` 终止帧放到 finish 回调；Node 先 `_flush → push(null)` 再跑 finish，终止帧偶发被丢 → reqRead 已 forwarded、reqWrite 挂死。`endPipe` 用 `write(body)+write(empty)+end()` 让终止帧走 `_transform`。
+- **whistle `socket.on('end', destroySocket)` 会 RST 未刷出的 pipe 字节**（上游 bug）：即使 encoder 已 finish，同一轮 `destroy()` 仍可能把出站字节丢掉。encoder 已 finish 时立刻 destroy 同样会 RST（localhost CONNECT 缓冲还在 Node 里）。`scripts/patch-whistle.sh` 改为 `nextTick` 后 `socket.end()`（半关闭、刷完再 FIN），备份 `load-plugin.js.pbmockx-pipe-bak`。`w2` 升级后需重跑补丁。
+- **whistle 复用已关闭的 HTTP/2 session 会 abort 整次请求**（上游 bug）：`lib/https/h2.js` 缓存 `Http2Session`，不检查 `closed`/`destroyed`。异步 `ERR_HTTP2_INVALID_SESSION` 走到 `init.js abort()` → `_closed`，把还在握手的 reqRead/reqWrite CONNECT 一起拆掉，客户端一直等到超时。没有插件时同一 H2 bug 仍在，但不会卡在 pipe CONNECT 上。`scripts/patch-whistle.sh` 丢掉死 session，H2 错误时 `callback()` 回退 HTTP/1.1（备份 `h2.js.pbmockx-h2-bak`）。
 - **SSE 不能 `readBody`**：`Content-Type` / `Accept` 含 `text/event-stream` 时走 `passthroughPipe`（按 chunk `write`），否则会等流结束才转发、客户端收不到事件。
 
 ### gzip/deflate/br 必须先解压再 decode

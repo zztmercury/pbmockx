@@ -7,7 +7,7 @@
 
 import { detect, parseForm, isSse, type DetectInfo } from './content-type';
 import { pbEngine, rules, flowStore } from './ctx';
-import { readBody, cloneData, pipeLog, endPipe, passthroughPipe } from './helpers';
+import { readBody, passthroughPipe } from './helpers';
 import { expandAny, packAny } from './any-expand';
 import * as zlib from 'zlib';
 
@@ -22,7 +22,6 @@ async function decodeForDisplay(info: DetectInfo, data: Buffer): Promise<any> {
 
 export default (server: any, options: any) => {
   server.on('request', async (req: any, res: any) => {
-    const t0 = Date.now();
     const fullUrl = req.originalReq?.fullUrl || '';
     const sessionId = req.originalReq?.id || fullUrl;
     const resHeaders = req.headers || {};
@@ -30,9 +29,6 @@ export default (server: any, options: any) => {
     const encoding = resHeaders['content-encoding'] || '';
     const statusCode = req.originalRes?.statusCode || 200;
     const method = req.originalReq?.method || 'GET';
-    const shortUrl = fullUrl.slice(0, 80);
-
-    pipeLog('res', sessionId, `begin status=${statusCode} ${method} ${shortUrl}`);
 
     // 立即记录响应元数据（status/headers），即使后续 readBody 失败或 decode
     // 被跳过，flow 也有响应状态，不会出现 status 空 → 便于定位超时。
@@ -41,7 +37,6 @@ export default (server: any, options: any) => {
     });
 
     if (isSse(resHeaders)) {
-      pipeLog('res', sessionId, '-> sse-passthrough');
       passthroughPipe(req, res);
       return;
     }
@@ -52,15 +47,13 @@ export default (server: any, options: any) => {
     } catch (e: any) {
       // Stream errored mid-body — nothing to forward, but must not leave the
       // pipe hanging (whistle waits for res.end()). Flush empty and bail.
-      pipeLog('res', sessionId, `read-error ${e?.message || e} elapsed=${Date.now() - t0}ms`);
       flowStore.upsert(sessionId, {
         url: fullUrl, method, status: statusCode, resHeaders,
         error: 'resRead stream failed: ' + (e?.message || e), ts: Date.now(),
       });
-      endPipe(res);
+      try { res.end(); } catch {}
       return;
     }
-    pipeLog('res', sessionId, `body-read ${body.length}B read=${Date.now() - t0}ms`);
 
     let decompressed = body;
     if (encoding.includes('gzip')) { try { decompressed = zlib.gunzipSync(body); } catch {} }
@@ -69,19 +62,18 @@ export default (server: any, options: any) => {
 
     const info: DetectInfo | null = detect(ct, decompressed);
     if (!info) {
-      endPipe(res, body);
+      res.end(body);
       flowStore.upsert(sessionId, {
         url: fullUrl, method, status: statusCode, resHeaders,
         resOriginalRaw: decompressed, ts: Date.now(),
       });
-      pipeLog('res', sessionId, `-> detect-null ${body.length}B total=${Date.now() - t0}ms`);
       return;
     }
 
     // Form (urlencoded) bodies: parse for display only, pass through unchanged (no patch).
     if (info.protocol === 'form') {
       // 立即转发，不阻塞；解析仅用于展示。
-      endPipe(res, body);
+      res.end(body);
       let parsed: any = null;
       try { parsed = parseForm(decompressed); }
       catch (e: any) { console.error('[pbmockx] resRead form parse error ' + fullUrl + ':', e.message); }
@@ -90,7 +82,6 @@ export default (server: any, options: any) => {
         resHeaders, resInfo: info, resDecoded: parsed, resOriginalRaw: decompressed,
         ts: Date.now(),
       });
-      pipeLog('res', sessionId, `-> form ${body.length}B total=${Date.now() - t0}ms`);
       return;
     }
 
@@ -99,20 +90,19 @@ export default (server: any, options: any) => {
     // root（实测 775ms），阻塞所有 pipe hook 共享的事件循环，短超时请求会先
     // 被客户端关闭。改为只记录 raw body，按需在 CGI/CLI 查询时再 decode。
     if (!rules.hasDataRules(fullUrl, info.protocol)) {
-      endPipe(res, body);
+      res.end(body);
       flowStore.upsert(sessionId, {
         url: fullUrl, method, status: statusCode,
         resHeaders, resInfo: info, resDecoded: null, resOriginalRaw: decompressed,
         ts: Date.now(),
       });
-      pipeLog('res', sessionId, `-> forwarded ${body.length}B total=${Date.now() - t0}ms`);
       return;
     }
 
     // 有 patch/map_local(data) 规则：必须 decode → patch → encode 后转发。
     try {
       let decoded: any = await decodeForDisplay(info, decompressed);
-      if (decoded == null) { endPipe(res, body); return; }
+      if (decoded == null) { res.end(body); return; }
 
       // Expand Any fields so patch path can navigate through them
       if (info.protocol === 'protobuf' && info.desc && info.messageType) {
@@ -145,8 +135,7 @@ export default (server: any, options: any) => {
         ts: Date.now(),
       });
 
-      endPipe(res, encoded);
-      pipeLog('res', sessionId, `-> patched ${encoded.length}B total=${Date.now() - t0}ms`);
+      res.end(encoded);
     } catch (e: any) {
       console.error('[pbmockx] resRead error ' + fullUrl + ':', e.message);
       flowStore.upsert(sessionId, {
@@ -154,8 +143,7 @@ export default (server: any, options: any) => {
         resHeaders, resInfo: info, resDecoded: null, resOriginalRaw: decompressed,
         error: e.message, ts: Date.now(),
       });
-      pipeLog('res', sessionId, `-> error ${e.message} total=${Date.now() - t0}ms`);
-      endPipe(res, body);
+      res.end(body);
     }
   });
 };
