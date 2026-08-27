@@ -16,7 +16,11 @@
 ## [0.6.4] - 2026-08-26
 
 ### 修复
+- **POST 偶发超时（resRead 从未到达）**：whistle pipe encoder 覆写 `Transform.end`，把 body 和 `\n0\n` 终止帧都放到 writable finish 回调里；Node Transform 在 finish 之前 `_flush → push(null)` 结束 readable，终止帧偶发被丢。表现：reqRead 已 `forwarded`，reqWrite 永远等不到终止帧，上游收不到完整请求。现在所有 pipe hook 用 `endPipe`：`write(body)` + `write(empty)` 走 `_transform` 发终止帧，再 `end()`。
 - **SSE 被整段缓冲**：`text/event-stream` 走 `readBody` 等流结束才转发，客户端收不到任何事件。`Content-Type` / `Accept` 含 `text/event-stream` 时按 chunk 透传（`passthroughPipe`），不 buffer。
+
+### 变更
+- pipe 诊断日志默认开（写 `~/.pbmockx/pipe.log`）；请求方向 pipe 默认启用。
 
 ## [0.6.3] - 2026-08-19
 
