@@ -21,7 +21,7 @@ JSON 转换中的 int64→string / enum→string 歧义。
 ```
 w2（whistle CLI）  ──►  whistle 进程（含 pbmockx 插件）
                           ├─ network: 抓包与查看（Request/Response 下的 PBView sub-tab）
-                          ├─ pipe://pbmockx: 自动解压 → 解码 → patch → 重新编码（返回未压缩 body）
+                          ├─ pipe://pbmockx: 请求透传记录；响应 JSON/PB + mock 规则时才解压 → 解码 → patch → 重新编码
                           └─ CGI: /plugin.pbmockx/cgi-bin/...（CLI 走这条路）
 ```
 
@@ -117,12 +117,12 @@ PB 全限定消息类型名。记下你要 mock 的 flow 的 `id`（接受前 8 
 ### 2.1 Patch — 按路径修改指定字段（推荐，不暂停、不超时）
 
 patch 通过 whistle 的 **pipe 机制**生效：插件加载时由 `whistle-plugin/rules.txt`
-自动注入 `* pipe://pbmockx` 全量规则，pbmockx 会接管所有请求 —— **自动解压
-gzip/deflate/br** → 解码 → **展开 `google.protobuf.Any` 字段**（按 `type_url`
-解码 value bytes 为内层 message 对象）→ 应用 patch 规则（path 可穿透 Any 字段
-导航到内层业务字段）→ **回包 Any 字段**（重新编码为 bytes）→ 重新编码 →
-返回**未压缩** body（whistle 会自动处理 `content-encoding`，无需手动
-re-compress）。**不暂停、不超时。**
+自动注入 `* pipe://pbmockx` 全量规则。**请求体只记录、立刻转发，永不 mock。**
+响应仅当 Content-Type 为 JSON 或 protobuf、且该 URL 有 patch / map_local(data)
+规则时才缓冲：自动解压 gzip/deflate/br → 解码 → **展开 `google.protobuf.Any`**
+（按 `type_url` 解码 value bytes）→ 应用 patch（path 可穿透 Any）→ **回包 Any**
+→ 重新编码 → 返回**未压缩** body（whistle 处理 `content-encoding`）。
+其它响应（SSE、HTML、无 mock 规则）按 chunk 透传，不阻塞。**不暂停、不超时。**
 （如需选择性 pipe，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则覆盖。）
 
 > **patch 穿透 Any 的 path 示例**：`data.value.list[0].list[2].app.title` ——
@@ -368,10 +368,10 @@ patch 规则只有在匹配请求经过 `pipe://pbmockx` 时才会执行。**插
 pattern: api/game      （比 * 更具体，只 pipe 匹配的请求）
 operator: pipe://pbmockx
 ```
-匹配的请求会走 pbmockx 的「自动解压 gzip/deflate/br → decode → **展开 Any 字段**
-→ patch（path 可穿透 Any）→ **回包 Any 字段** → encode」管道，返回**未压缩**
-body —— whistle 会自动处理 content-encoding（剥除响应头里的 `content-encoding`），
-客户端和 Web UI 看到的都是 raw bytes。其他流量不受影响。
+匹配的请求进入 pipe。请求体只记录、立刻转发。响应仅 JSON/PB 且有 mock 规则时
+才走「自动解压 gzip/deflate/br → decode → **展开 Any** → patch → **回包 Any**
+→ encode」，返回**未压缩** body —— whistle 会剥除 `content-encoding`。
+其它响应按 chunk 透传。
 
 ## 5. 故障排查
 - **`pbmockx doctor` 报 `w2: NOT running`**：运行 `w2 start`。若 `w2` 命令

@@ -12,7 +12,7 @@ whistle 插件，抓包查看/修改 **protobuf + JSON** 数据，专为 AI agen
   - `patch`：按 path 改字段（PB message 对象层面操作，不走 JSON；path 可穿透 `google.protobuf.Any` 字段——pipe hook 自动展开/回包）
   - `map_local(data)`：dict → PB encode 整 body 替换
   - `map_local(file)` / `map_remote`：whistle 原生规则（rawfile:// / https://）
-- **pipe 单向 mock**：`pattern pipe://pbmockx` 启用「解压 gzip/deflate/br → decode → 展开 Any → patch → 回包 Any → encode」管道（响应头取自 `req.headers`），返回未压缩 body 由 whistle 处理 content-encoding
+- **pipe 单向 mock**：`pattern pipe://pbmockx` 接管流量。请求体只记录、立刻转发（不 mock）。响应仅当 Content-Type 为 JSON/PB 且有 patch/map_local(data) 规则时才「解压 gzip/deflate/br → decode → 展开 Any → patch → 回包 Any → encode」（响应头取自 `req.headers`），返回未压缩 body 由 whistle 处理 content-encoding；否则按 chunk 透传。
 - **rulesServer 自动翻译**：map_remote / map_local(file) 规则自动翻译为 whistle 原生规则
 - **持久化规则**：rules.yaml 实时写回，map_local(data) 数据存外部 mock-data/ 文件
 - **CLI + w2 exec + SKILL.md**，所有命令支持 `-h`/`--help`，多 agent 通用
@@ -46,8 +46,8 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/sc
 w2 start                                 # npm link 后插件全局可用，w2 自动加载（含 rules.txt）
 ```
 > 插件加载时通过 `whistle-plugin/rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，
-> 所有请求默认走 pipe（decode→patch→encode + gzip 解压 + Any 展开/回包），无需手动在 whistle UI 写 pipe 规则。
-> 如需选择性 pipe，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则。
+> 所有请求默认走 pipe。请求体只记录不 mock；响应仅 JSON/PB 且有 mock 规则才 decode→patch→encode。
+> 无需手动在 whistle UI 写 pipe 规则。如需选择性 pipe，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则。
 
 ## CLI（AI agent 用）
 
@@ -107,7 +107,8 @@ pbmockx <command> -h / --help                  # 各命令的详细帮助（flow
   - `src/pb-engine.ts` — PB 引擎（protobufjs + long，monkey-patch `fromDescriptor` 跳过 `resolveAll`，`addJSON` 加载 `descriptor.json` 等 WKT）
   - `src/any-expand.ts` — `google.protobuf.Any` 展开/回包（patch path 穿透 Any 字段时使用：按 `type_url` 解码 value bytes → 应用 patch → 重新编码为 bytes）
   - `src/flow-store.ts` — flow 存储（upsert by session ID，单 ID 同时持有 req+res，LRU 上限）
-  - `src/resRead.ts` / `reqRead.ts` — pipe hooks（解压 gzip/deflate/br → decode → 展开 Any → patch → 回包 Any → encode，响应头取自 `req.headers`）
+  - `src/reqRead.ts` — 请求透传 + 记录（不 mock）
+  - `src/resRead.ts` — 仅 JSON/PB 且有 mock 规则时 decode → 展开 Any → patch → 回包 Any → encode（响应头取自 `req.headers`）；否则透传记录
   - `src/rulesServer.ts` — map_remote/map_local(file) → whistle 原生规则
   - `src/uiServer/` — Koa CGI（规则 CRUD + flow 查询 + decode-pb）
   - `public/pb-req.html` / `pb-res.html` — PBView 子标签页（Request/Response 各一份，JS 内联无外部脚本），通过 whistleBridge 的 `addSessionActiveListener` + `getActiveSession` 拉取 session body

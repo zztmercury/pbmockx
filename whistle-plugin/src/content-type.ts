@@ -35,8 +35,12 @@ export function isPb(ct: string): boolean {
   return !!ct && PB_CT_RE.test(ct);
 }
 
+export function isJsonCt(ct: string): boolean {
+  return !!ct && /json/i.test(ct);
+}
+
 export function isJson(ct: string, data: Buffer): boolean {
-  if (ct && /json/i.test(ct)) return true;
+  if (isJsonCt(ct)) return true;
   if (!data || data.length === 0) return false;
   try {
     JSON.parse(data.toString('utf-8'));
@@ -48,6 +52,24 @@ export function isJson(ct: string, data: Buffer): boolean {
 
 export function isForm(ct: string): boolean {
   return !!ct && FORM_CT_RE.test(ct);
+}
+
+function headerCt(headers: Record<string, any> | string | null | undefined): string {
+  if (!headers) return '';
+  if (typeof headers === 'string') return headers;
+  return headers['content-type'] || headers['Content-Type'] || '';
+}
+
+/** Header-only JSON or protobuf. Used to decide whether resRead may buffer. */
+export function isJsonOrPbCt(headers: Record<string, any> | string | null | undefined): boolean {
+  const ct = headerCt(headers);
+  return isPb(ct) || isJsonCt(ct);
+}
+
+export function protocolFromCt(ct: string): 'protobuf' | 'json' | undefined {
+  if (isPb(ct)) return 'protobuf';
+  if (isJsonCt(ct)) return 'json';
+  return undefined;
 }
 
 /** SSE: Content-Type 或 Accept 含 text/event-stream。长连接，不能 buffer。 */

@@ -2,7 +2,7 @@
  * MockRule + RuleEngine — unified rule model for patch + map_local(data) +
  * map_local(file) + map_remote.
  *
- * - patch / map_local(data): applied in pipe resRead/reqRead (need PB encode)
+ * - patch / map_local(data): applied in pipe resRead only (need PB encode)
  * - map_local(file) / map_remote: translated to whistle native rules by rulesServer
  *
  * rules.yaml stores all rules. map_local(data) uses data_file reference to
@@ -247,9 +247,10 @@ export class RuleEngine {
 
   /**
    * Whether any patch / map_local(data) rule matches this URL — i.e. rules
-   * that modify the body inside the pipe hook. map_remote / map_local(file)
+   * that modify the response body inside resRead. map_remote / map_local(file)
    * are handled by rulesServer (whistle native rules), not in the pipe, so
-   * they do not require a decode→encode round-trip.
+   * they do not require a decode→encode round-trip. Request bodies are never
+   * mocked.
    */
   hasDataRules(url: string, protocol?: Protocol): boolean {
     return this.matched(url, protocol).some(r =>

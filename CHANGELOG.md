@@ -5,6 +5,12 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.6] - 2026-09-03
+
+### 变更
+- **请求体永不 mock、不阻塞**：reqRead 按 chunk 立刻转发并旁路记录 raw body；decode 只在 `pbmockx decode --req` 时按需做。reqWrite 一律透传。
+- **响应只在 JSON/PB 且有 mock 规则时才 buffer**：resRead 看 Content-Type 是否 JSON/protobuf，且存在 patch / map_local(data)。命中才 `readBody` → decode → patch → encode；否则（含 SSE、HTML、无规则）按 chunk 透传并旁路记录。map_remote / map_local(file) 仍走 whistle 原生规则，不触发 pipe 缓冲。
+
 ## [0.6.5] - 2026-08-27
 
 ### 修复

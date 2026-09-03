@@ -3,6 +3,7 @@
  */
 
 import * as crypto from 'crypto';
+import * as zlib from 'zlib';
 
 /** Read all data from a readable stream into a Buffer. */
 export function readBody(req: any): Promise<Buffer> {
@@ -50,10 +51,11 @@ export function readBody(req: any): Promise<Buffer> {
 }
 
 /**
- * SSE / 长连接透传：按 chunk write，不 buffer 整段 body。
- * 只在 end/error 关流；close 在 SSE 存活期间也会发，不能当结束。
+ * 透传：按 chunk write，不 buffer 整段 body。
+ * 默认只在 end/error 关流；close 在 SSE 存活期间也会发，不能当结束。
+ * 有限长度的普通 HTTP 在 abort 时可能只有 close，需要 endOnClose。
  */
-export function passthroughPipe(req: any, res: any): void {
+export function passthroughPipe(req: any, res: any, opts?: { endOnClose?: boolean }): void {
   let ended = false;
   const finish = () => {
     if (ended) return;
@@ -66,6 +68,44 @@ export function passthroughPipe(req: any, res: any): void {
   });
   req.on('end', finish);
   req.on('error', finish);
+  if (opts?.endOnClose) req.on('close', finish);
+}
+
+/**
+ * 透传并收集完整 body（转发不阻塞：每个 chunk 立刻 write）。
+ * 用于请求记录、以及无 mock 规则的响应记录。
+ */
+export function tapAndPassthrough(req: any, res: any): Promise<Buffer> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      try { res.end(); } catch {}
+      resolve(Buffer.concat(chunks));
+    };
+    req.on('data', (c: Buffer) => {
+      chunks.push(c);
+      if (done) return;
+      try { res.write(c); } catch { finish(); }
+    });
+    req.on('end', finish);
+    req.on('error', finish);
+    req.on('close', finish);
+    if (req.readableEnded) finish();
+  });
+}
+
+/** gunzip / inflate / brotli；失败则返回原字节。 */
+export function decompressBody(body: Buffer, encoding: string): Buffer {
+  if (!encoding) return body;
+  try {
+    if (encoding.includes('gzip')) return zlib.gunzipSync(body);
+    if (encoding.includes('deflate')) return zlib.inflateSync(body);
+    if (encoding.includes('br')) return zlib.brotliDecompressSync(body);
+  } catch {}
+  return body;
 }
 
 /** Generate a short flow ID. */

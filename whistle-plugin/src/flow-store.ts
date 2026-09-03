@@ -42,7 +42,7 @@ export class FlowStore {
     if (rec) {
       // Merge patch into existing record
       Object.assign(rec, patch);
-      if (patch.reqDecoded !== undefined) rec.hasReq = true;
+      if (patch.reqDecoded !== undefined || patch.reqOriginalRaw !== undefined || patch.reqHeaders !== undefined) rec.hasReq = true;
       if (patch.resDecoded !== undefined || patch.resHeaders !== undefined) rec.hasRes = true;
     } else {
       rec = {
@@ -50,7 +50,7 @@ export class FlowStore {
         url: patch.url || '',
         method: patch.method || '',
         status: null,
-        hasReq: patch.reqDecoded !== undefined,
+        hasReq: patch.reqDecoded !== undefined || patch.reqOriginalRaw !== undefined || patch.reqHeaders !== undefined,
         hasRes: patch.resDecoded !== undefined || patch.resHeaders !== undefined,
         ts: Date.now(),
         ...patch,

@@ -8,7 +8,8 @@
 
 ```
 whistle (:8899, Node.js)  ──加载──►  whistle.pbmockx 插件（进程内）
-                                              ├─ resRead/reqRead hook（gunzip→decode→Any展开→patch→Any回包→encode，pipe 单向）
+                                              ├─ reqRead（透传 + 记录请求体，不 mock、不阻塞）
+                                              ├─ resRead（仅 JSON/PB 且有 patch/map_local(data) 才 buffer→decode→patch→encode；否则透传记录）
                                               ├─ resWrite/reqWrite hook（passthrough）
                                               ├─ rulesServer（map_remote/map_local file → whistle 原生规则）
                                               └─ uiServer（Koa CGI，规则 CRUD + flow 查询 + decode-pb）
@@ -25,7 +26,7 @@ pbmockx CLI（whistle-plugin/bin/cli.js）  ──HTTP──►  uiServer CGI（
 - **gzip/deflate/br 解压**：pipe hook 在 decode 前按 `content-encoding` 用 `zlib.gunzipSync`/`inflateSync`/`brotliDecompressSync` 解压。**返回 UNCOMPRESSED body（不重新压缩）**——whistle pipe（方案二）把它当 plaintext 处理，自动剥离 `content-encoding`，客户端和 Web UI 看到的都是原始字节。
 - **Any 展开/回包**（`src/any-expand.ts`）：patch 前对包含 `google.protobuf.Any` 字段的 message 调用 `expandAny`，按 `type_url` 在 root 里查类型、把 `value` bytes 解码为内层 message 对象（替换原 Any 字段为展开后的 message）；patch path 可直接导航到内层业务字段（如 `data.value.list[0].app.title`，`data` 是 Any，`value` 是内层 message）。patch 完成后调用 `packAny` 把展开的 message 重新编码为 bytes、包回 Any。**不修改 `@type` / `type_url`**。
 - `whistle-plugin/bin/cli.js` 是 CLI 入口（package.json 的 `"bin": {"pbmockx": "./bin/cli.js"}`）。`w2 exec pbmockx <cmd>` 或 npm link 后直接 `pbmockx <cmd>`。所有命令支持 `-h`/`--help`。
-- **`whistle-plugin/rules.txt`** 是插件级规则文件（`* pipe://pbmockx`）——whistle 加载插件时自动注入，**无需用户在 Web UI 里手写 `pipe://pbmockx` 规则**。所有请求默认走 pipe（decode→patch→encode）；用户想选择性 pipe 时，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则覆盖。
+- **`whistle-plugin/rules.txt`** 是插件级规则文件（`* pipe://pbmockx`）——whistle 加载插件时自动注入，**无需用户在 Web UI 里手写 `pipe://pbmockx` 规则**。所有请求默认走 pipe；请求体只记录不 mock，响应仅 JSON/PB 且有 mock 规则才 decode→patch→encode。用户想选择性 pipe 时，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则覆盖。
 - `scripts/install.sh` 检查 Node.js≥18 → 检查/安装 whistle → 构建插件（tsc）→ `npm link`（让插件全局可用，`w2 start` 自动加载）→ 重启 whistle 加载插件 + rules.txt → skill install。`--uninstall` 反向清理：清旧 w2 add 规则 + `w2 uninstall` + `npm unlink -g` + `pbmockx skill uninstall` + 删除克隆仓库。**不检查 lack**（dev-only 工具）。
 - **已删除的文件**（历史版本曾有）：`bin/pbmockx`（旧 Python CLI）、`scripts/start.sh`（旧 mitmproxy 启动脚本）、`addon/pbmockx_addon.py`（Python mitmproxy addon）、`scripts/start-mitmproxy.sh`（mitmproxy fallback 启动）、`whistle-plugin/public/pb-view.html`（旧独立页面，已废弃）。注：`pb-view.js` 曾被内联进 HTML，后又拆出为共享外部 JS（见上条）。
 
@@ -76,7 +77,7 @@ cd whistle-plugin && npx tsc --noEmit
 
 ## 规则引擎（4 种类型）
 
-`RuleEngine`（`whistle-plugin/src/ruleEngine.ts`）——统一规则存储，`type` 字段选择属性：
+`RuleEngine`（`whistle-plugin/src/rules.ts`）——统一规则存储，`type` 字段选择属性：
 
 | type | 落点 | 关键字段 | 作用 |
 |---|---|---|---|
@@ -90,7 +91,7 @@ cd whistle-plugin && npx tsc --noEmit
 - **rules.yaml** 存储所有规则（js-yaml 读写）。启动时加载（`RuleEngine.reload`），add/del 时自动保存（`RuleEngine.save`）。`.gitignore` 排除 `rules.yaml`（运行时生成），仓库里有 `rules.yaml.example` 作为模板。
 - **map_local data** 的 mock 数据存在 `whistle-plugin/mock-data/<id>.json` 外部文件，规则里只存 `data_file` 引用。`.gitignore` 排除 `mock-data/`。
 - **规则 ID**：`crypto.randomBytes(4).toString('hex')`（8 字符 hex）。
-- **pipe 触发条件**：只有匹配 `pattern pipe://pbmockx` 的请求才会进入 resRead/reqRead。插件加载时通过 `whistle-plugin/rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，无需用户手动配置；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。rulesServer 会对有 patch/map_local data 规则的 pattern 注入对应 pipe 规则。
+- **pipe 触发条件**：只有匹配 `pattern pipe://pbmockx` 的请求才会进入 resRead/reqRead。插件加载时通过 `whistle-plugin/rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，无需用户手动配置；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。
 
 ## 关键陷阱
 
@@ -109,15 +110,19 @@ map_local(data) 需要 `desc`（.proto 描述符 base64 或文件路径）+ `mes
 Patch 不再走 dict→JSON→re-encode。直接在 `decodeDelimited` 返回的 message 对象上 `set_by_path`，再 `encodeDelimited`。`fromObject` 会做类型强转（字符串数字→number），但仍受 PB 类型约束（int64 不能传非数字字符串）。
 
 ### pipe 只对匹配 `pattern pipe://pbmockx` 的请求触发
-resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 pattern 生效**。插件加载时通过 `rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，所以默认所有请求都走 pipe；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。rulesServer 还会对有 patch/map_local(data) 规则的 pattern 注入对应 pipe 规则。未走 pipe 的请求，patch/map_local(data) 不生效（但 map_remote/map_local(file) 仍由 rulesServer 原生规则处理）。
+resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 pattern 生效**。插件加载时通过 `rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，所以默认所有请求都走 pipe；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。未走 pipe 的请求，patch/map_local(data) 不生效（但 map_remote/map_local(file) 仍由 rulesServer 原生规则处理）。
+
+**请求体永不 mock、不阻塞**：reqRead 按 chunk 立刻转发并旁路记录 raw body（`tapAndPassthrough`），decode 只在 CLI/`decode --req` 时按需做。reqWrite 一律透传。
+
+**响应只在 JSON/PB + 有 mock 规则时才 buffer**：resRead 看 `Content-Type` 是否 JSON/PB，且 `hasDataRules(url)`（patch / map_local data）。命中才 `readBody` → decode → patch → encode；否则按 chunk 透传并旁路记录。SSE 永远 `passthroughPipe`。map_remote / map_local(file) 不走 pipe mock 路径。
 
 ### pipe hook 的头与 body 位置（容易踩坑）
 - **resRead**：响应头在 `req.headers`（`req.originalRes.headers` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**——别去 `req.originalRes.headers` 拿 content-type/encoding）。响应体通过 `req` stream 传入（pipe hook 把它当作 HTTP 请求 body 接收）。
 - **reqRead**：请求头在 `req.headers`，请求体通过 `req` stream 传入。
-- 读 body 用 `readBody(req)`（`src/helpers.ts`），聚合 chunk 后返回 Buffer。
+- 读 body：有 mock 规则时用 `readBody(req)`（`src/helpers.ts`）聚合 chunk；无规则 / 请求侧用 `tapAndPassthrough`（边转发边收集）。
 - **whistle `socket.on('end', destroySocket)` 会 RST 未刷出的 pipe 字节**（上游 bug）：即使 encoder 已 finish，同一轮 `destroy()` 仍可能把出站字节丢掉。`scripts/patch-whistle.sh` 去掉这条 `end` listener——`encoder.pipe(socket)` 在 encoder readable 结束时会自己 `end()` 可写端。备份 `load-plugin.js.pbmockx-pipe-bak`。`w2` 升级后需重跑补丁。
 - **whistle 复用已关闭的 HTTP/2 session 会 abort 整次请求**（上游 bug）：`lib/https/h2.js` 缓存 `Http2Session`，不检查 `closed`/`destroyed`。异步 `ERR_HTTP2_INVALID_SESSION` 走到 `init.js abort()` → `_closed`，把还在握手的 reqRead/reqWrite CONNECT 一起拆掉，客户端一直等到超时。没有插件时同一 H2 bug 仍在，但不会卡在 pipe CONNECT 上。`scripts/patch-whistle.sh` 丢掉死 session（lookup + `close` 时清 cache）；无 body 才 `callback()` 回退 HTTP/1.1，已开始发 body 的 POST 回 502、不重放（备份 `h2.js.pbmockx-h2-bak`）。
-- **SSE 不能 `readBody`**：`Content-Type` / `Accept` 含 `text/event-stream` 时走 `passthroughPipe`（按 chunk `write`），否则会等流结束才转发、客户端收不到事件。
+- **SSE / 非 JSON·PB / 无 mock 规则不能 `readBody`**：`Content-Type` / `Accept` 含 `text/event-stream` 时走 `passthroughPipe`（按 chunk `write`）；其它无 mock 的响应走 `tapAndPassthrough`。否则会等流结束才转发、客户端收不到事件。
 
 ### gzip/deflate/br 必须先解压再 decode
 pipe hook 在 decode 前按 `content-encoding` 用 `zlib.gunzipSync`/`inflateSync`/`brotliDecompressSync` 解压。**encode 后返回 UNCOMPRESSED body（不重新压缩）**——whistle pipe（方案二）把它当 plaintext 处理，自动剥离 `content-encoding`，所以客户端和 Web UI 看到的都是原始字节。如果跳过解压直接 decode，gzip 流会被当成 PB 解析失败。

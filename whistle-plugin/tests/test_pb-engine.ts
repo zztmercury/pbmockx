@@ -10,7 +10,7 @@ import 'protobufjs/ext/descriptor';
 import { PBEngine, DescCache } from '../src/pb-engine';
 import { parsePath, setByPath, getByPath, appendByPath, insertByPath, removeByPath } from '../src/path-nav';
 import { MockRule, RuleEngine } from '../src/rules';
-import { isPb, isJson, isForm, isSse, parseForm, parseCtParams, detect } from '../src/content-type';
+import { isPb, isJson, isJsonCt, isJsonOrPbCt, isForm, isSse, parseForm, parseCtParams, detect, protocolFromCt } from '../src/content-type';
 import { buildFieldTree, renderTree } from '../src/field-tree';
 import * as path from 'path';
 import * as os from 'os';
@@ -99,6 +99,24 @@ test('detect identifies PB and JSON', () => {
 
   const none = detect('text/html', Buffer.from('<html>'));
   assert.strictEqual(none, null);
+  return Promise.resolve();
+});
+
+test('isJsonCt / isJsonOrPbCt / protocolFromCt are header-only', () => {
+  assert.ok(isJsonCt('application/json'));
+  assert.ok(isJsonCt('application/json; charset=utf-8'));
+  assert.ok(!isJsonCt('text/plain'));
+  assert.ok(!isJsonCt(''));
+  assert.ok(isJsonOrPbCt({ 'content-type': 'application/json' }));
+  assert.ok(isJsonOrPbCt({ 'Content-Type': 'application/x-protobuf' }));
+  assert.ok(isJsonOrPbCt('application/x-google-protobuf'));
+  assert.ok(!isJsonOrPbCt({ 'content-type': 'text/html' }));
+  assert.ok(!isJsonOrPbCt({ accept: 'application/json' }));
+  assert.ok(!isJsonOrPbCt(null));
+  assert.strictEqual(protocolFromCt('application/json'), 'json');
+  assert.strictEqual(protocolFromCt('application/x-protobuf; messageType=demo.T'), 'protobuf');
+  assert.strictEqual(protocolFromCt('text/html'), undefined);
+  assert.strictEqual(protocolFromCt(''), undefined);
   return Promise.resolve();
 });
 
@@ -301,6 +319,30 @@ test('RuleEngine add/dedup/delete', () => {
   assert.strictEqual(engine.list().length, 1);
 
   // Cleanup
+  fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+test('RuleEngine hasDataRules only matches patch / map_local(data)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
+  const engine = new RuleEngine(path.join(tmpDir, 'rules.yaml'), path.join(tmpDir, 'mock-data'));
+
+  assert.ok(!engine.hasDataRules('http://api/game', 'json'));
+
+  engine.add(new MockRule({ type: 'map_remote', url_pattern: 'api/game', replacement: 'https://new.com' }));
+  assert.ok(!engine.hasDataRules('http://api/game', 'json'));
+
+  engine.add(new MockRule({ type: 'map_local', url_pattern: 'api/game', source: 'file', file_path: '/tmp/x.json' }));
+  assert.ok(!engine.hasDataRules('http://api/game', 'json'));
+
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api/game', path: 'name', value: 'x', protocol: 'json' }));
+  assert.ok(engine.hasDataRules('http://api/game', 'json'));
+  assert.ok(!engine.hasDataRules('http://api/game', 'protobuf'));
+  assert.ok(!engine.hasDataRules('http://other', 'json'));
+
+  engine.add(new MockRule({ type: 'map_local', url_pattern: 'api/pb', source: 'data', data_file: 'x.json' }));
+  assert.ok(engine.hasDataRules('http://api/pb', 'protobuf'));
+
   fs.rmSync(tmpDir, { recursive: true });
   return Promise.resolve();
 });
