@@ -27,14 +27,21 @@ const flowStore = new FlowStore();
 let loaded = false;
 function ensureInit() {
   if (loaded) return;
-  loaded = true;
   const n = rules.reload();
+  // Only latch success AFTER reload() returns, so a failed read is retried.
+  loaded = true;
   if (n > 0) {
     console.log(`[pbmockx] loaded ${n} rules from rules.yaml`);
   }
 }
 
-// Lazy init on first access
+// Eager init at module load: every hook imports this module, and the uiServer
+// CGI path uses the `rules` singleton directly (never calling getContext()).
+// Lazy init would leave an empty in-memory engine whose save() could then
+// overwrite rules.yaml and delete every on-disk rule.
+ensureInit();
+
+// Kept for callers; idempotent and cheap once loaded.
 export function getContext() {
   ensureInit();
   return { pbEngine, rules, flowStore, PLUGIN_ROOT, RULES_FILE, MOCK_DATA_DIR };

@@ -8,7 +8,7 @@ import * as assert from 'assert';
 import protobuf from 'protobufjs';
 import 'protobufjs/ext/descriptor';
 import { PBEngine, DescCache } from '../src/pb-engine';
-import { parsePath, setByPath, getByPath, appendByPath, insertByPath, removeByPath } from '../src/path-nav';
+import { parsePath, setByPath, getByPath, appendByPath, insertByPath, removeByPath, unsetByPath } from '../src/path-nav';
 import { MockRule, RuleEngine } from '../src/rules';
 import { isPb, isJson, isJsonCt, isJsonOrPbCt, isForm, isSse, parseForm, parseCtParams, detect, protocolFromCt } from '../src/content-type';
 import { buildFieldTree, renderTree } from '../src/field-tree';
@@ -386,6 +386,87 @@ test('RuleEngine save/reload round-trip', () => {
   return Promise.resolve();
 });
 
+test('RuleEngine save never clobbers an unread rules.yaml (data-loss regression)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
+  const rulesFile = path.join(tmpDir, 'rules.yaml');
+  const mockDir = path.join(tmpDir, 'mock-data');
+  fs.mkdirSync(mockDir, { recursive: true });
+
+  // 3 pre-existing rules on disk (as a plugin restart would find them).
+  const initialYaml = [
+    '- id: aaa11111',
+    '  type: patch',
+    '  url_pattern: api/one',
+    '  path: name',
+    '  value: one',
+    '  protocol: json',
+    '- id: bbb22222',
+    '  type: patch',
+    '  url_pattern: api/two',
+    '  path: name',
+    '  value: two',
+    '- id: ccc33333',
+    '  type: map_remote',
+    '  url_pattern: api/old',
+    '  replacement: https://new.com',
+    '',
+  ].join('\n');
+  fs.writeFileSync(rulesFile, initialYaml, 'utf-8');
+
+  // Deliberately do NOT reload() first — this is the exact bug: save() used to
+  // serialize the empty in-memory list and wipe the 3 on-disk rules.
+  const engine = new RuleEngine(rulesFile, mockDir);
+  const added = engine.add(new MockRule({ type: 'patch', url_pattern: 'api/new', path: 'x', value: 1 }));
+  assert.ok(engine.save(), 'save() should succeed after implicit reload');
+
+  const check = new RuleEngine(rulesFile, mockDir);
+  assert.strictEqual(check.reload(), 4, 'all 3 original rules plus the new one must remain');
+  const ids = check.list().map(r => r.id);
+  assert.ok(ids.includes('aaa11111'), 'original rule aaa11111 must survive');
+  assert.ok(ids.includes('bbb22222'), 'original rule bbb22222 must survive');
+  assert.ok(ids.includes('ccc33333'), 'original rule ccc33333 must survive');
+  assert.ok(ids.includes(added.id), 'newly added rule must be present');
+
+  fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+test('RuleEngine save refuses to clobber an unreadable rules.yaml', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
+  const rulesFile = path.join(tmpDir, 'rules.yaml');
+
+  // Unclosed YAML flow sequence — js-yaml throws on parse.
+  const corrupt = 'rules: [1, 2,\n';
+  fs.writeFileSync(rulesFile, corrupt, 'utf-8');
+  const before = fs.readFileSync(rulesFile);
+
+  const engine = new RuleEngine(rulesFile, path.join(tmpDir, 'mock-data'));
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api/x', path: 'name', value: 'y' }));
+  assert.strictEqual(engine.save(), false, 'save() must refuse when disk state is unknown');
+  assert.deepStrictEqual(fs.readFileSync(rulesFile), before, 'file bytes must be untouched');
+
+  fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+test('RuleEngine save works on a fresh install with no rules.yaml', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
+  const rulesFile = path.join(tmpDir, 'rules.yaml');
+  const mockDir = path.join(tmpDir, 'mock-data');
+
+  const engine = new RuleEngine(rulesFile, mockDir);
+  assert.strictEqual(engine.reload(), 0, 'no file → legitimate empty state');
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api/fresh', path: 'name', value: 'z' }));
+  assert.ok(engine.save(), 'save() must succeed on a fresh install');
+
+  const check = new RuleEngine(rulesFile, mockDir);
+  assert.strictEqual(check.reload(), 1);
+  assert.strictEqual(check.list()[0].url_pattern, 'api/fresh');
+
+  fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
 test('RuleEngine apply with repeated-field actions', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
   const engine = new RuleEngine(path.join(tmpDir, 'rules.yaml'), path.join(tmpDir, 'mock-data'));
@@ -445,6 +526,276 @@ test('RuleEngine append/remove round-trips through PB encode', async () => {
   assert.strictEqual(back2.items[0].name, 'b');
 
   fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+// --- patch value: false/null + unset (toDict serialization fix) ---
+
+test('RuleEngine toDict/save/reload preserves falsy values + unset action', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
+  const rulesFile = path.join(tmpDir, 'rules.yaml');
+  const engine = new RuleEngine(rulesFile, path.join(tmpDir, 'mock-data'));
+
+  const cases: Array<{ path: string; value?: any; action?: any }> = [
+    { path: 'a', value: false },
+    { path: 'b', value: null },
+    { path: 'c', value: 0 },
+    { path: 'd', value: '' },
+    { path: 'e', value: { k: 'v' } },
+    { path: 'f', value: [1, 2] },
+    { path: 'g', action: 'unset' },
+  ];
+  for (const c of cases) {
+    engine.add(new MockRule({ type: 'patch', url_pattern: 'api/roundtrip', ...c }));
+  }
+
+  // toDict() via list() must not drop any of them
+  const listed = engine.list();
+  assert.strictEqual(listed.length, cases.length);
+  const byPath = (arr: any[], p: string) => arr.find(r => r.path === p);
+  assert.strictEqual(byPath(listed, 'a').value, false);
+  assert.strictEqual(byPath(listed, 'b').value, null);
+  assert.strictEqual(byPath(listed, 'c').value, 0);
+  assert.strictEqual(byPath(listed, 'd').value, '');
+  assert.strictEqual(byPath(listed, 'g').action, 'unset');
+  // accepted consequence: false booleans now persist too
+  assert.strictEqual(byPath(listed, 'a').delimited, false);
+  assert.strictEqual(byPath(listed, 'a').is_regex, false);
+
+  assert.ok(engine.save());
+
+  const engine2 = new RuleEngine(rulesFile, path.join(tmpDir, 'mock-data'));
+  assert.strictEqual(engine2.reload(), cases.length);
+  const reloaded = engine2.list();
+  assert.strictEqual(byPath(reloaded, 'a').value, false);
+  assert.strictEqual(byPath(reloaded, 'b').value, null);
+  assert.strictEqual(byPath(reloaded, 'c').value, 0);
+  assert.strictEqual(byPath(reloaded, 'd').value, '');
+  assert.deepStrictEqual(byPath(reloaded, 'e').value, { k: 'v' });
+  assert.deepStrictEqual(byPath(reloaded, 'f').value, [1, 2]);
+  assert.strictEqual(byPath(reloaded, 'g').action, 'unset');
+  assert.strictEqual(byPath(reloaded, 'a').delimited, false);
+
+  fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+test('RuleEngine apply: false/null kept, unset deletes key (JSON)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
+  const engine = new RuleEngine(path.join(tmpDir, 'rules.yaml'), path.join(tmpDir, 'mock-data'));
+
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api/json', path: 'a', value: false }));
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api/json', path: 'b', value: null }));
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api/json', path: 'nested.x', action: 'unset' }));
+
+  const data = { a: 1, b: 2, nested: { x: 1, y: 2 } };
+  const r = engine.apply('http://api/json', 'json', data);
+
+  assert.ok(Object.prototype.hasOwnProperty.call(r, 'a'));
+  assert.strictEqual(r.a, false);
+  assert.ok(Object.prototype.hasOwnProperty.call(r, 'b'));
+  assert.strictEqual(r.b, null);
+  // unset removes the own property entirely
+  assert.ok(!Object.prototype.hasOwnProperty.call(r.nested, 'x'));
+  assert.strictEqual(r.nested.y, 2);
+
+  fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+test('RuleEngine apply: bool false + unset round-trip through PB decode', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-test-'));
+  const engine = new RuleEngine(path.join(tmpDir, 'rules.yaml'), path.join(tmpDir, 'mock-data'));
+
+  const root = protobuf.Root.fromJSON({
+    nested: {
+      FlagResp: { fields: { name: { type: 'string', id: 1 }, flag: { type: 'bool', id: 2 } } },
+    },
+  });
+  root.resolveAll();
+  const FlagResp = root.lookupType('FlagResp');
+
+  const msg = FlagResp.decode(FlagResp.encode({ name: 'x', flag: true }).finish()) as any;
+  assert.ok(Object.prototype.hasOwnProperty.call(msg, 'flag'));
+
+  // patch flag=false keeps the field present (does NOT delete it)
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api/pb', path: 'flag', value: false }));
+  const patched = engine.apply('http://api/pb', 'protobuf', msg);
+  const back = FlagResp.decode(FlagResp.encode(patched).finish()) as any;
+  assert.ok(Object.prototype.hasOwnProperty.call(back, 'flag'));
+  assert.strictEqual(back.flag, false);
+
+  // unset removes the field — absent after decode
+  engine.add(new MockRule({ type: 'patch', url_pattern: 'api/pb', path: 'name', action: 'unset' }));
+  const patched2 = engine.apply('http://api/pb', 'protobuf', msg);
+  const back2 = FlagResp.decode(FlagResp.encode(patched2).finish()) as any;
+  assert.ok(!Object.prototype.hasOwnProperty.call(back2, 'name'));
+  assert.strictEqual(back2.flag, false);
+
+  fs.rmSync(tmpDir, { recursive: true });
+  return Promise.resolve();
+});
+
+test('unsetByPath throws when parent path is missing', () => {
+  const obj: any = { a: { b: 1 } };
+  unsetByPath(obj, ['a', 'b']);
+  assert.ok(!Object.prototype.hasOwnProperty.call(obj.a, 'b'));
+
+  assert.throws(() => unsetByPath({ a: {} }, ['a', 'b', 'c']), /path not found: a\.b\.c/);
+  assert.throws(() => unsetByPath({}, ['missing', 'x']), /path not found: missing\.x/);
+  return Promise.resolve();
+});
+
+// --- CLI rules add: parsing + payload (unit) ---
+// NOTE: the CLI module is already required at the top of this file as
+//   const cli = require('../../bin/cli.js');
+// which resolves from dist/tests/ → whistle-plugin/bin/cli.js. Requiring it is
+// side-effect free (no stdout, no exit) — verified by the suite running at all.
+
+test('CLI _buildPatchRule keeps false/null/0/"" as typed values', () => {
+  const has = (o: any, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+
+  const rFalse = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', 'false']));
+  assert.deepStrictEqual(rFalse, { type: 'patch', url_pattern: 'u', path: 'p', value: false });
+  assert.ok(has(rFalse, 'value'), 'value key must exist for false (not dropped)');
+  assert.strictEqual(rFalse.value, false);
+
+  const rNull = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', 'null']));
+  assert.ok(has(rNull, 'value'), 'value key must exist for null (not dropped)');
+  assert.strictEqual(rNull.value, null);
+
+  const rNeg = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '-1']));
+  assert.strictEqual(rNeg.value, -1);
+  assert.strictEqual(typeof rNeg.value, 'number', '-1 must not be swallowed as a flag nor left a string');
+
+  const rZero = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '0']));
+  assert.strictEqual(rZero.value, 0);
+
+  const rEmpty = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '""']));
+  assert.strictEqual(rEmpty.value, '');
+
+  // argv-level empty string (`pbmockx rules add u p ''`): the RAW token is '' (falsy),
+  // unlike the two-char '""' above. This is the one input where a truthiness guard on
+  // parsed.value would silently drop the value, so it pins the `!== undefined` contract.
+  const rEmptyArgv = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '']));
+  assert.ok(has(rEmptyArgv, 'value'), 'argv-level empty string must not be dropped');
+  assert.strictEqual(rEmptyArgv.value, '');
+
+  const rObj = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '{"k":"v"}']));
+  assert.deepStrictEqual(rObj.value, { k: 'v' });
+
+  const rArr = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '[1,2]']));
+  assert.deepStrictEqual(rArr.value, [1, 2]);
+
+  return Promise.resolve();
+});
+
+test('CLI _buildPatchRule omits value for unset/remove and keeps action/index', () => {
+  const has = (o: any, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+
+  const rUnset = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '--unset']));
+  assert.deepStrictEqual(rUnset, { type: 'patch', url_pattern: 'u', path: 'p', action: 'unset' });
+  assert.strictEqual(has(rUnset, 'value'), false, 'unset must not carry a value key');
+
+  const rAppend = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '--append', '-2']));
+  assert.deepStrictEqual(rAppend, { type: 'patch', url_pattern: 'u', path: 'p', action: 'append', value: -2 });
+
+  const rInsert = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '--insert', '1', 'x']));
+  assert.deepStrictEqual(rInsert, { type: 'patch', url_pattern: 'u', path: 'p', action: 'insert', index: 1, value: 'x' });
+
+  // index 0 is falsy but must NOT be lost
+  const rInsert0 = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '--insert', '0', 'null']));
+  assert.deepStrictEqual(rInsert0, { type: 'patch', url_pattern: 'u', path: 'p', action: 'insert', index: 0, value: null });
+  assert.strictEqual(rInsert0.index, 0);
+  assert.strictEqual(rInsert0.value, null);
+
+  const rRemove = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '--remove', '0']));
+  assert.deepStrictEqual(rRemove, { type: 'patch', url_pattern: 'u', path: 'p', action: 'remove', index: 0 });
+  assert.strictEqual(has(rRemove, 'value'), false, 'remove must not carry a value key');
+
+  return Promise.resolve();
+});
+
+test('CLI _buildPatchRule maps --protocol pb and stays backward compatible', () => {
+  const rProto = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'p', '--protocol', 'pb', 'v']));
+  assert.strictEqual(rProto.protocol, 'protobuf');
+  assert.strictEqual(rProto.value, 'v');
+
+  const rCompat = cli._buildPatchRule(cli._parseRulesAddArgs(['api/game', 'game.name', 'TestName', '--protocol', 'pb']));
+  assert.deepStrictEqual(rCompat, { type: 'patch', url_pattern: 'api/game', path: 'game.name', value: 'TestName', protocol: 'protobuf' });
+
+  return Promise.resolve();
+});
+
+test('CLI rules add: value==path and path-substring-of-url parse correctly', () => {
+  // old fragile delimiting (indexOf) could mis-split these
+  const r1 = cli._buildPatchRule(cli._parseRulesAddArgs(['u', 'pathexample', 'pathexample']));
+  assert.deepStrictEqual(r1, { type: 'patch', url_pattern: 'u', path: 'pathexample', value: 'pathexample' });
+
+  const r2 = cli._buildPatchRule(cli._parseRulesAddArgs(['api/game/game', 'game', 'v']));
+  assert.deepStrictEqual(r2, { type: 'patch', url_pattern: 'api/game/game', path: 'game', value: 'v' });
+
+  return Promise.resolve();
+});
+
+test('CLI _parseValue JSON-parses with string fallback', () => {
+  assert.strictEqual(cli._parseValue('false'), false);
+  assert.strictEqual(cli._parseValue('null'), null);
+  assert.strictEqual(cli._parseValue('-1'), -1);
+  assert.strictEqual(cli._parseValue('0'), 0);
+  assert.strictEqual(cli._parseValue('true'), true);
+  assert.strictEqual(cli._parseValue('abc'), 'abc');
+  assert.strictEqual(cli._parseValue(undefined), undefined);
+  return Promise.resolve();
+});
+
+test('CLI _renderRuleValue renders unset/falsy/empty', () => {
+  assert.strictEqual(cli._renderRuleValue({ action: 'unset' }), '(unset)');
+  assert.strictEqual(cli._renderRuleValue({ value: false }), 'false');
+  assert.strictEqual(cli._renderRuleValue({ value: null }), 'null');
+  assert.strictEqual(cli._renderRuleValue({ value: 0 }), '0');
+  assert.strictEqual(cli._renderRuleValue({ value: '' }), '""');
+  assert.strictEqual(cli._renderRuleValue({}), '');
+  // action wins over a present value
+  assert.strictEqual(cli._renderRuleValue({ action: 'unset', value: false }), '(unset)');
+  return Promise.resolve();
+});
+
+test('CLI rules add error paths exit 1 with a message (child process)', () => {
+  const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+  const { spawnSync } = require('child_process');
+  // _parseRulesAddArgs calls process.exit(1) on bad input, so it must run in a
+  // child process — running it in-process would kill the test runner.
+  const runArgs = (args: string[]) => spawnSync(process.execPath, [
+    '-e',
+    'const cli = require(' + JSON.stringify(cliPath) + ');'
+      + 'const args = ' + JSON.stringify(args) + ';'
+      + 'const parsed = cli._parseRulesAddArgs(args);'
+      + 'process.stdout.write(JSON.stringify(cli._buildPatchRule(parsed)));',
+  ], { encoding: 'utf-8' });
+
+  const cases: Array<{ args: string[]; needle: string }> = [
+    { args: ['u', 'p'], needle: 'missing <value>' },
+    { args: ['u', 'p', '--bogus'], needle: 'unknown flag: --bogus' },
+    { args: ['u', 'p', '--append'], needle: '--append requires a <value>' },
+    { args: ['u', 'p', '--insert', '-1', 'x'], needle: '--insert requires a non-negative <idx>' },
+    { args: ['u', 'p', '--insert', '1'], needle: '--insert requires a <value>' },
+    { args: ['u', 'p', '--remove', 'x'], needle: '--remove requires a non-negative <idx>' },
+    { args: ['u', 'p', '--append', '1', '--remove', '2'], needle: 'mutually exclusive' },
+  ];
+  for (const c of cases) {
+    const r = runArgs(c.args);
+    const err = String(r.stderr);
+    assert.strictEqual(r.status, 1, 'expected exit 1 for ' + JSON.stringify(c.args) + ' (stderr: ' + err + ')');
+    assert.ok(err.includes('Error: '), 'stderr must contain "Error: " for ' + JSON.stringify(c.args) + ' (got: ' + err + ')');
+    assert.ok(err.includes(c.needle), 'stderr must contain "' + c.needle + '" for ' + JSON.stringify(c.args) + ' (got: ' + err + ')');
+  }
+
+  // happy path exits 0 — makes the status===1 assertions above meaningful
+  const ok = runArgs(['u', 'p', 'false']);
+  assert.strictEqual(ok.status, 0, 'happy path should exit 0 (stderr: ' + String(ok.stderr) + ')');
+  assert.ok(String(ok.stdout).includes('"value":false'), 'happy path should serialize value:false, got: ' + String(ok.stdout));
+
   return Promise.resolve();
 });
 

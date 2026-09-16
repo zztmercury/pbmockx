@@ -64,6 +64,18 @@ export function removeByPath(obj: any, parts: PathSegment[], index: number): voi
   arr.splice(index, 1);
 }
 
+/** Delete the key at `parts` (navigate to the parent, then `delete parent[lastKey]`). */
+export function unsetByPath(obj: any, parts: PathSegment[]): void {
+  if (parts.length === 0) return;
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (cur == null) throw new Error(`path not found: ${parts.join('.')}`);
+    cur = cur[parts[i]];
+  }
+  if (cur == null) throw new Error(`path not found: ${parts.join('.')}`);
+  delete cur[parts[parts.length - 1]];
+}
+
 /** Check whether a path exists in the object. */
 export function hasPath(obj: any, parts: PathSegment[]): boolean {
   try {

@@ -50,13 +50,13 @@ pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full]
                                                           #   --path <path> 导航到子树（折叠显示），路径含 [n] 需加引号
                                                           #   --full        完整展开所有层级（不截断）
 pbmockx rules add|list|del|save|reload ...               # patch 规则 CRUD（path 可穿透 google.protobuf.Any）
-                                                        #   add 支持 --append/--insert <idx>/--remove <idx> 操作 repeated 字段条目（缺省整体替换）
+                                                        #   add 支持 --append/--insert <idx>/--remove <idx> 操作 repeated 字段条目；--unset 删除字段（缺省整体替换）
 pbmockx map-local add|list|del ...                        # map_local 规则（--data/--file）
 pbmockx map-remote add|list|del ...                       # map_remote 规则（--regex）
 pbmockx web                                                # 打开 whistle Web UI
 pbmockx connect-android [-s <serial>]                     # Android 代理配置 + 证书状态检测（system/user/not_found/unknown；用户证书目录受 SELinux 保护，非 root 无法自动确认 → unknown）
 pbmockx doctor                                             # 全链路检查（node/whistle/plugin/link/version）
-pbmockx fix                                                # 自动修复：rebuild→npm link→w2 restart→verify
+pbmockx fix                                                # 自动修复：总是 rebuild（tsc）→ npm link → w2 restart → verify
 pbmockx agent-doc                                          # 打印 SKILL.md
 pbmockx skill install|list|uninstall                      # 安装 SKILL.md 到 agent 目录（~/.agents + ~/.claude）
 pbmockx version [--check]                                  # 版本（可选检查 GitHub release）
@@ -81,7 +81,7 @@ cd whistle-plugin && npx tsc --noEmit
 
 | type | 落点 | 关键字段 | 作用 |
 |---|---|---|---|
-| `patch` | resRead（pipe） | `path`, `value`, `protocol`, `action`(`set`/`append`/`insert`/`remove`), `index` | 在 message 对象上按 path set 字段（path 可穿透 `google.protobuf.Any`——pipe hook 先 `expandAny` 再 patch 再 `packAny`），fromObject→encode；`action` 对 repeated 字段做条目级新增/插入/删除 |
+| `patch` | resRead（pipe） | `path`, `value`, `protocol`, `action`(`set`/`append`/`insert`/`remove`/`unset`), `index` | 在 message 对象上按 path set 字段（path 可穿透 `google.protobuf.Any`——pipe hook 先 `expandAny` 再 patch 再 `packAny`），fromObject→encode；`action` 对 repeated 字段做条目级新增/插入/删除，`unset` 删除 path 键 |
 | `map_local` (data) | resRead（pipe） | `data_file`, `desc`, `messageType` | 整 body 替换为外部 JSON 文件，PB encode 后下发 |
 | `map_local` (file) | rulesServer（whistle 原生） | `file_path` | 翻译为 whistle `file://` 原生规则，由 whistle 替换 body |
 | `map_remote` | rulesServer（whistle 原生） | `replacement`, `is_regex` | 翻译为 whistle `xxx://` 原生规则，重写 url + Host |
@@ -107,7 +107,7 @@ protobufjs 直接操作 message 对象（`fromObject`/`toObject`），**不做 J
 map_local(data) 需要 `desc`（.proto 描述符 base64 或文件路径）+ `messageType` 才能 PB encode。缺一个就用 `JSON.stringify` 兜底（非 PB body）。`data_file` 指向 `mock-data/<id>.json`，文件内容是已 decode 的 JSON 对象。
 
 ### Patch 直接操作 message 对象
-Patch 不再走 dict→JSON→re-encode。直接在 `decodeDelimited` 返回的 message 对象上 `set_by_path`，再 `encodeDelimited`。`fromObject` 会做类型强转（字符串数字→number），但仍受 PB 类型约束（int64 不能传非数字字符串）。
+Patch 不再走 dict→JSON→re-encode。直接在 `decodeDelimited` 返回的 message 对象上 `set_by_path`，再 `encodeDelimited`。`fromObject` 会做类型强转（字符串数字→number），但仍受 PB 类型约束（int64 不能传非数字字符串）。规则序列化（`toDict()`）**只过滤 `undefined`**——`false` / `null` 会真实写入 body 并持久化到 rules.yaml（`0`/`''`/对象/数组亦然）。删除键用 `action: unset`：`null` = 键存在且值为 `null`，`unset` = 键不存在，二者语义不同。
 
 ### pipe 只对匹配 `pattern pipe://pbmockx` 的请求触发
 resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 pattern 生效**。插件加载时通过 `rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，所以默认所有请求都走 pipe；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。未走 pipe 的请求，patch/map_local(data) 不生效（但 map_remote/map_local(file) 仍由 rulesServer 原生规则处理）。

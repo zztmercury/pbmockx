@@ -58,6 +58,129 @@ function _parseValue(s) {
   catch { return s; }
 }
 
+const RULES_ADD_USAGE =
+  'Usage: pbmockx rules add <url> <path> <value> [--protocol pb|json]\n' +
+  '       pbmockx rules add <url> <path> --append <value>\n' +
+  '       pbmockx rules add <url> <path> --insert <idx> <value>\n' +
+  '       pbmockx rules add <url> <path> --remove <idx>\n' +
+  '       pbmockx rules add <url> <path> --unset';
+
+function _rulesAddFail(msg) {
+  console.error('Error: ' + msg);
+  console.error(RULES_ADD_USAGE);
+  process.exit(1);
+}
+
+/**
+ * Parse `rules add` arguments (the leading "add" subcommand must already be
+ * stripped). Pure/self-contained except for process.exit on invalid input.
+ *
+ * Known flags consume their params first; every remaining token is a plain
+ * positional in order: url, rulePath, value. A token starting with "-" that is
+ * NOT a known flag is treated as a positional (so "-1" is a valid value); a
+ * token starting with "--" that is not a known flag is an error.
+ *
+ * Returns { url, rulePath, value, action, index, protocol }:
+ *   - value is the RAW string (caller runs _parseValue), undefined for
+ *     remove/unset
+ *   - action is undefined for a plain set, else
+ *     'append' | 'insert' | 'remove' | 'unset'
+ *   - index is only set for insert/remove
+ * On invalid input prints an error + usage and exits 1.
+ */
+function _parseRulesAddArgs(args) {
+  const positionals = [];
+  let protocol;
+  let action;
+  let index;
+  let appendValue;
+  let actionCount = 0;
+
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--protocol') {
+      if (args[i + 1] === undefined) _rulesAddFail('--protocol requires a <value>');
+      protocol = args[++i];
+    } else if (a === '--append') {
+      if (args[i + 1] === undefined) _rulesAddFail('--append requires a <value>');
+      appendValue = args[++i];
+      action = 'append';
+      actionCount++;
+    } else if (a === '--insert') {
+      const idxRaw = args[i + 1];
+      if (!idxRaw || !/^\d+$/.test(idxRaw)) _rulesAddFail('--insert requires a non-negative <idx>');
+      index = parseInt(idxRaw, 10);
+      i++;
+      action = 'insert';
+      actionCount++;
+    } else if (a === '--remove') {
+      const idxRaw = args[i + 1];
+      if (!idxRaw || !/^\d+$/.test(idxRaw)) _rulesAddFail('--remove requires a non-negative <idx>');
+      index = parseInt(idxRaw, 10);
+      i++;
+      action = 'remove';
+      actionCount++;
+    } else if (a === '--unset') {
+      action = 'unset';
+      actionCount++;
+    } else if (a.startsWith('--')) {
+      _rulesAddFail('unknown flag: ' + a);
+    } else {
+      positionals.push(a);
+    }
+  }
+
+  if (actionCount > 1) _rulesAddFail('--append/--insert/--remove/--unset are mutually exclusive');
+
+  const url = positionals[0];
+  const rulePath = positionals[1];
+  const positionalValue = positionals[2];
+  const noTarget = !url || !rulePath;
+
+  if (action === 'append') {
+    if (noTarget) _rulesAddFail('missing <url> and/or <path>');
+    return { url, rulePath, value: appendValue, action, index: undefined, protocol };
+  }
+  if (action === 'insert' || action === 'remove') {
+    if (noTarget) _rulesAddFail('missing <url> and/or <path>');
+    if (action === 'insert' && positionalValue === undefined) _rulesAddFail('--insert requires a <value>');
+    return { url, rulePath, value: action === 'insert' ? positionalValue : undefined, action, index, protocol };
+  }
+  if (action === 'unset') {
+    if (noTarget) _rulesAddFail('missing <url> and/or <path>');
+    return { url, rulePath, value: undefined, action, index: undefined, protocol };
+  }
+  // plain set: value is the 3rd positional (must exist)
+  if (noTarget) _rulesAddFail('missing <url> and/or <path>');
+  if (positionalValue === undefined) _rulesAddFail('missing <value> for set (use --append/--unset if intended)');
+  return { url, rulePath, value: positionalValue, action: undefined, index: undefined, protocol };
+}
+
+/** Render a rule's value for the "Rule added:" echo line. */
+function _renderRuleValue(rule, fallbackAction) {
+  if (!rule) return '';
+  const action = rule.action !== undefined ? rule.action : fallbackAction;
+  if (action === 'unset') return '(unset)';
+  if (rule.value !== undefined) return JSON.stringify(rule.value);
+  return '';
+}
+
+/**
+ * Compose the exact patch-rule payload POSTed to /cgi-bin/rules from a parsed
+ * `rules add` result. Pure. `value` is only attached when the parser produced
+ * one (undefined → key omitted), and stays a raw string until _parseValue runs
+ * here (so "false"/"null"/"0" keep their JSON type).
+ */
+function _buildPatchRule(parsed) {
+  const rule = { type: 'patch', url_pattern: parsed.url, path: parsed.rulePath };
+  const protocol = parsed.protocol === 'pb' ? 'protobuf' : parsed.protocol;
+  if (protocol) rule.protocol = protocol;
+  if (parsed.action) rule.action = parsed.action;
+  if (parsed.index !== undefined) rule.index = parsed.index;
+  if (parsed.value !== undefined) rule.value = _parseValue(parsed.value);
+  return rule;
+}
+
 // --- Android cert detection (node-forge) ---
 
 let _forge;
@@ -292,6 +415,7 @@ Subcommands:
   add <url> <path> --append <value>               Append item to a repeated field
   add <url> <path> --insert <idx> <value>         Insert item at index of a repeated field
   add <url> <path> --remove <idx>                 Remove item at index of a repeated field
+  add <url> <path> --unset                        Delete the key at <path> (no value)
   list [--type patch|map_local|map_remote]        List rules
   del <id>                                        Delete rule by ID
   save                                            Save rules to rules.yaml
@@ -305,6 +429,7 @@ Examples:
   pbmockx rules add 'api/game' game.tags --append '{"k":"v"}'
   pbmockx rules add 'api/game' game.list --insert 1 '{"id":9}'
   pbmockx rules add 'api/game' game.list --remove 0
+  pbmockx rules add 'api/game' game.obsolete --unset
   pbmockx rules list
   pbmockx rules del abc12345`);
 }
@@ -487,55 +612,11 @@ async function cmd_rules(args) {
   const sub = args[0];
   if (hasHelp(args) || !sub) { helpRules(); return; }
   if (sub === 'add') {
-    const url = args.find(a => !a.startsWith('-') && a !== 'add');
-    const rulePath = args.find((a, i) => i > 0 && !a.startsWith('-') && a !== url);
-    const protoIdx = args.indexOf('--protocol');
-    const protocol = protoIdx >= 0 ? (args[protoIdx + 1] === 'pb' ? 'protobuf' : args[protoIdx + 1]) : undefined;
-    const appendIdx = args.indexOf('--append');
-    const insertIdx = args.indexOf('--insert');
-    const removeIdx = args.indexOf('--remove');
-
-    // action dispatch: exactly one of --append/--insert/--remove, else plain set
-    const actions = [appendIdx, insertIdx, removeIdx].filter(i => i >= 0);
-    if (actions.length > 1) {
-      console.error('Error: --append/--insert/--remove are mutually exclusive');
-      process.exit(1);
-    }
-
-    const rule = { type: 'patch', url_pattern: url, path: rulePath };
-    if (protocol) rule.protocol = protocol;
-
-    if (appendIdx >= 0) {
-      if (!url || !rulePath) { console.error('Usage: pbmockx rules add <url> <path> --append <value>'); process.exit(1); }
-      const value = args.find((a, i) => i > appendIdx && !a.startsWith('-'));
-      if (value === undefined) { console.error('Error: --append requires a <value>'); process.exit(1); }
-      rule.action = 'append';
-      rule.value = _parseValue(value);
-    } else if (insertIdx >= 0) {
-      if (!url || !rulePath) { console.error('Usage: pbmockx rules add <url> <path> --insert <idx> <value>'); process.exit(1); }
-      const idxRaw = args[insertIdx + 1];
-      const value = args.find((a, i) => i > insertIdx + 1 && !a.startsWith('-'));
-      if (!idxRaw || /^-/.test(idxRaw) || value === undefined) {
-        console.error('Usage: pbmockx rules add <url> <path> --insert <idx> <value>'); process.exit(1);
-      }
-      rule.action = 'insert';
-      rule.index = parseInt(idxRaw, 10);
-      rule.value = _parseValue(value);
-    } else if (removeIdx >= 0) {
-      if (!url || !rulePath) { console.error('Usage: pbmockx rules add <url> <path> --remove <idx>'); process.exit(1); }
-      const idxRaw = args[removeIdx + 1];
-      if (!idxRaw || /^-/.test(idxRaw)) { console.error('Usage: pbmockx rules add <url> <path> --remove <idx>'); process.exit(1); }
-      rule.action = 'remove';
-      rule.index = parseInt(idxRaw, 10);
-    } else {
-      // plain set (backward compatible): value is the 3rd positional arg
-      const value = args.find((a, i) => i > args.indexOf(rulePath) && !a.startsWith('-'));
-      if (!url || !rulePath) { console.error('Usage: pbmockx rules add <url> <path> <value> [--protocol pb|json]'); process.exit(1); }
-      rule.value = _parseValue(value);
-    }
+    const parsed = _parseRulesAddArgs(args.slice(1));
+    const rule = _buildPatchRule(parsed);
 
     const result = await _req('POST', '/cgi-bin/rules', rule);
-    console.log('Rule added:', result.rule.id, result.rule.url_pattern, result.rule.path, '=>', result.rule.value);
+    console.log('Rule added:', result.rule.id, result.rule.url_pattern, result.rule.path, '=>', _renderRuleValue(result.rule, parsed.action));
   } else if (sub === 'list') {
     const typeIdx = args.indexOf('--type');
     const type = typeIdx >= 0 ? args[typeIdx + 1] : undefined;
@@ -546,7 +627,10 @@ async function cmd_rules(args) {
       if (r.type === 'patch' && r.action && r.action !== 'set') {
         pathCol += ' [' + r.action + (r.index !== undefined ? ' ' + r.index : '') + ']';
       }
-      return { id: r.id, type: r.type, url: (r.url_pattern || '').slice(0, 50), path: pathCol, value: r.value !== undefined ? JSON.stringify(r.value) : '' };
+      let valueCol = '';
+      if (r.action === 'unset') valueCol = '(unset)';
+      else if (r.value !== undefined) valueCol = JSON.stringify(r.value);
+      return { id: r.id, type: r.type, url: (r.url_pattern || '').slice(0, 50), path: pathCol, value: valueCol };
     }));
   } else if (sub === 'del') {
     const id = args.find(a => !a.startsWith('-') && a !== 'del');
@@ -784,18 +868,16 @@ async function cmd_fix(args) {
   console.log('=== pbmockx fix ===');
   const pluginDir = PLUGIN_ROOT;
 
-  // Step 1: Check if dist/ exists, rebuild if missing
-  const distDir = path.join(pluginDir, 'dist');
-  if (!fs.existsSync(distDir)) {
-    console.log('[1/3] dist/ missing — rebuilding...');
-    try {
+  // Step 1: always rebuild (npx tsc is idempotent/fast); npm install only when deps are missing
+  console.log('[1/3] Rebuilding plugin (tsc)...');
+  try {
+    if (!fs.existsSync(path.join(pluginDir, 'node_modules'))) {
+      console.log('  node_modules missing — installing dependencies...');
       execSync('npm install', { cwd: pluginDir, stdio: 'inherit' });
-      execSync('npx tsc', { cwd: pluginDir, stdio: 'inherit' });
-      console.log('  ✓ Built');
-    } catch (e) { console.error('  ✗ Build failed:', e.message); process.exit(1); }
-  } else {
-    console.log('[1/3] dist/ exists — skip build');
-  }
+    }
+    execSync('npx tsc', { cwd: pluginDir, stdio: 'inherit' });
+    console.log('  ✓ Built');
+  } catch (e) { console.error('  ✗ Build failed:', e.message); process.exit(1); }
 
   // Step 2: Re-link npm
   console.log('[2/4] Re-linking npm...');
@@ -973,4 +1055,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { subjectHashOld, classifyProxyState, classifyCertState, parseDevices };
+module.exports = { subjectHashOld, classifyProxyState, classifyCertState, parseDevices, _parseRulesAddArgs, _renderRuleValue, _parseValue, _buildPatchRule };

@@ -173,7 +173,7 @@ pbmockx rules add '<url_regex>' 'items' --remove 0
 ```
 
 - `--append` / `--insert` / `--remove` 三者互斥；不带任一 flag 时保持
-  原有整体替换语义（向后兼容）。
+  原有整体替换语义（向后兼容）。`--unset` 是另一个 action flag（见 §2.1.2）。
 - `--append <value>` / `--insert <idx> <value>` 的 `<value>` 会先按 JSON
   解析（同普通 patch）。对 PB 的 message 列表，传一个 JSON 对象即可，
   编码时 protobufjs 会自动把它转成对应 message（enum 可传数字或名字、
@@ -183,6 +183,22 @@ pbmockx rules add '<url_regex>' 'items' --remove 0
   `[n]` 索引 —— 索引由 `--insert`/`--remove` 的 `<idx>` 提供。想改列表中
   某个已有条目的内部字段（如 `items[0].name`），仍用普通 set patch：
   `pbmockx rules add '<url>' 'items[0].name' 'NewName'`。
+
+#### 2.1.2 Patch action `unset` — 删除字段
+
+`unset` 是 `set`（缺省）之外的另一种 patch action：在 `path` 处**删除键**，
+让该键从响应 body 中消失。
+
+```
+# 删除 game.name 字段（body 里不再有该键）
+pbmockx rules add '<url_regex>' 'game.name' --unset
+```
+
+- 持久化到 `rules.yaml` 为 `action: unset`；`rules list` 该行 value 列显示
+  `(unset)`。
+- **`null` 与 `unset` 语义严格区分**：`null` 表示**键存在、值为 `null`**，
+  `unset` 表示**键不存在**。要移除键，请用 `unset`。
+- 不含 `value`、不含 `action` 的存量规则行为与之前一致。
 
 ### 2.2 Map Local — 替换整个响应 body
 
@@ -287,6 +303,7 @@ pbmockx rules add <url_regex> <path> <value> [--protocol pb|json]
 pbmockx rules add <url_regex> <path> --append <value>
 pbmockx rules add <url_regex> <path> --insert <idx> <value>
 pbmockx rules add <url_regex> <path> --remove <idx>
+pbmockx rules add <url_regex> <path> --unset
 pbmockx rules list [--type patch|map_local|map_remote]
 pbmockx rules del <id>
 pbmockx rules save                    # 手动写回 rules.yaml
@@ -311,7 +328,7 @@ pbmockx map-remote del <id>
 ### 工具维护
 ```
 pbmockx doctor                        # 全链路健康检查（w2 + 插件 + npm link + 规则 + 流量）
-pbmockx fix                           # 自动修复：rebuild（dist 缺失时）→ npm link → w2 restart → verify
+pbmockx fix                           # 自动修复：总是 rebuild（tsc）→ npm link → w2 restart → verify
 pbmockx agent-doc                     # 打印本指南
 pbmockx skill install                 # 安装到 agent skill 目录（~/.agents/skills/ + ~/.claude/skills/）
 pbmockx version [--check]             # 显示版本；--check 查询 GitHub 最新版
@@ -324,9 +341,20 @@ pbmockx version [--check]             # 显示版本；--check 查询 GitHub 最
   `null`、对象（`{"k":"v"}`）、数组（`[1,2]`）。否则当作字符串处理。
   在 shell 中，字符串需加引号：`"hello"`。对象/数组用单引号包裹
   JSON：`'{"k":"v"}'`。
+  - `false` 与 `null` 都会**真实写入 body 并持久化到 rules.yaml**（序列化时
+    只过滤 `undefined`）：`false` = 键存在且值为 `false`，`null` = 键存在且值为
+    `null`。`0` / `''` / 对象 / 数组同样正常。
+  - 想表达「**键不存在**」（删除该键）请用 `--unset`（见 §2.1.2），不要用
+    `null` —— `null` 是「键在、值为 null」，`unset` 是「键被删除」，语义不同。
+- **删除字段**：`--unset` 删除 `path` 对应的键（键从 body 中消失），是
+  `set` 之外的另一种 patch action（见 §2.1.2）。
 - **repeated 字段条目操作**：`--append <value>` 追加、`--insert <idx> <value>`
   插入、`--remove <idx>` 删除；不带这些 flag 时 `rules add <path> <value>`
   为整体替换（见 §2.1.1）。
+- **`rules add` 参数解析**：负数（如 `-1`）会被当作 value（不再被误判成
+  flag）；set / append 缺 value、或出现未知 `--flag` 都会报错并以退出码 1
+  结束。已知 flag：`--protocol <v>`、`--append <value>`、
+  `--insert <idx> <value>`、`--remove <idx>`、`--unset`。
 - path **区分大小写** —— proto 字段名是 snake_case（不是 camelCase）。
 
 ### ⚠️ PB 类型陷阱 —— v0.4.0 与旧版的关键差异

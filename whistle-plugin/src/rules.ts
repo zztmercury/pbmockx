@@ -15,13 +15,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as yaml from 'js-yaml';
-import { parsePath, setByPath, appendByPath, insertByPath, removeByPath, type PathSegment } from './path-nav';
+import { parsePath, setByPath, appendByPath, insertByPath, removeByPath, unsetByPath, type PathSegment } from './path-nav';
 import type { Protocol } from './content-type';
 
 export type RuleType = 'patch' | 'map_local' | 'map_remote';
 
-/** Patch operation: set (default, replace whole field) | append | insert | remove. */
-export type PatchAction = 'set' | 'append' | 'insert' | 'remove';
+/** Patch operation: set (default, replace whole field) | append | insert | remove | unset. */
+export type PatchAction = 'set' | 'append' | 'insert' | 'remove' | 'unset';
 
 export interface MockRuleData {
   id?: string;
@@ -118,7 +118,7 @@ export class MockRule {
       replacement: this.replacement,
       is_regex: this.isRegex,
     })) {
-      if (v !== undefined && v !== null && v !== false) {
+      if (v !== undefined) {
         (d as any)[k] = v;
       }
     }
@@ -141,6 +141,12 @@ export class RuleEngine {
   private rules: MockRule[] = [];
   private rulesFile: string;
   private mockDataDir: string;
+  /**
+   * True only once reload() has genuinely established disk state (file read +
+   * parsed, or a confirmed "no rules file yet"). save() refuses to write until
+   * then.
+   */
+  private initialized = false;
 
   constructor(rulesFile: string, mockDataDir: string) {
     this.rulesFile = rulesFile;
@@ -233,6 +239,9 @@ export class RuleEngine {
             case 'remove':
               removeByPath(result, parts, rule.index ?? 0);
               break;
+            case 'unset':
+              unsetByPath(result, parts);
+              break;
             case 'set':
             default:
               setByPath(result, parts, rule.value);
@@ -259,6 +268,24 @@ export class RuleEngine {
   }
 
   save(): boolean {
+    // save() serializes the WHOLE in-memory list, so writing before ever
+    // reading disk silently deletes every existing rule. Guarantee we have
+    // read disk first, and refuse to write if we could not — regardless of
+    // how hooks are wired.
+    if (!this.initialized) {
+      // Rules added before this first save live only in memory; reload()
+      // replaces this.rules with the on-disk set, so carry them across and
+      // re-apply (add() dedups) to avoid dropping the pending mutation.
+      const pending = this.rules.slice();
+      this.reload();
+      if (!this.initialized) {
+        console.error('[pbmockx] refusing to save rules.yaml: could not read current rules');
+        return false;
+      }
+      for (const r of pending) {
+        this.add(r);
+      }
+    }
     try {
       // Preserve header comments
       let header = '';
@@ -287,13 +314,20 @@ export class RuleEngine {
   }
 
   reload(): number {
-    if (!fs.existsSync(this.rulesFile)) return 0;
+    if (!fs.existsSync(this.rulesFile)) {
+      // No rules file yet — a legitimate "no rules" disk state.
+      this.initialized = true;
+      return 0;
+    }
     try {
       const content = fs.readFileSync(this.rulesFile, 'utf-8');
       const items = yaml.load(content) as MockRuleData[] || [];
       this.rules = items.map(item => new MockRule(item));
+      this.initialized = true;
       return this.rules.length;
     } catch (e) {
+      // Failed to read/parse — do NOT claim to know disk state, so save()
+      // can never clobber a file we could not read.
       console.error(`[pbmockx] reload rules.yaml failed: ${e}`);
       return 0;
     }

@@ -5,6 +5,21 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.7] - 2026-09-16
+
+### 修复
+- **rules.yaml 可能被整个清空（P0，数据丢失）**：`RuleEngine` 的初始化是惰性的，只由 `getContext()` 触发，而 uiServer 的 CGI 路由直接使用 `rules` 单例、从不调用它，于是插件每次（重）启动后内存中的规则引擎都是空的 —— 此时任何一次 `rules add` / `rules del` / `rules save` 都会把空内存全量写盘，**删除 rules.yaml 中所有存量规则**。同时，规则在启动时也不会自动加载（mock 静默失效，直到手动 `rules reload`）。现在 `ctx` 在模块加载时即 eager 初始化（规则随插件启动自动加载）；并且 `save()` 在尚未成功读取磁盘状态前拒绝写入 —— 读取失败时报错并返回 `false`，完全不触碰文件。
+- **`value: false` / `value: null` 被静默丢弃（P0）**：`toDict()` 之前把 `false`/`null` 连同 `undefined` 一起过滤，导致 `rules add <url> <path> false` 无法保存到 rules.yaml；即便存下来，运行时会执行 `setByPath(obj, path, undefined)`，键从 body 中**整个消失**（「设为 false」变成「删除键」，语义被静默反转）。现在只过滤 `undefined`，`false` / `null` 正常持久化并写入 body。`0` / `''` / 对象 / 数组一直正常，保持不变。
+- **`rules add` 参数解析**：负数（如 `-1`）现在会被当作 value 接受（之前 `rules add <url> <path> -1` 会静默丢弃 value，叠加上述 bug 后等于删键）；set / append 缺 value 现在报错并以退出码 1 结束（不再静默变成「无 value」）；未知 `--flag` 同样报错并退出 1。已知 flag：`--protocol <v>`、`--append <value>`、`--insert <idx> <value>`、`--remove <idx>`、`--unset`。
+- **`pbmockx fix` 现在总是重新构建**：之前仅在 `dist/` 不存在时才跑 `tsc`，`src/` 下的改动会被静默漏编译；现在 rebuild 步骤总是执行 `tsc`（`npm install` 仍按需）。
+
+### 新增
+- **patch 新 action `unset`**：删除 `path` 对应的键（键从 body 中消失）。CLI：`pbmockx rules add <url> <path> --unset`，持久化为 rules.yaml 的 `action: unset`。不含 `value` 的存量规则行为与之前一致。
+- **`null` 与 `unset` 语义严格区分**：`null` = 键存在且值为 `null`；`unset` = 键不存在。删除键请用 `unset`（此前只能靠整 body 的 map_local，或因上述 falsy bug 误触）。
+
+### 变更
+- **`rules list` value 列**：value 已定义时用 `JSON.stringify(value)` 渲染（`false` → `false`，`null` → `null`），`unset` action 显示 `(unset)`，否则留空。
+
 ## [0.6.6] - 2026-09-03
 
 ### 变更
