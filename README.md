@@ -14,7 +14,7 @@ whistle 插件，抓包查看/修改 **protobuf + JSON** 数据，专为 AI agen
   - `map_local(file)` / `map_remote`：whistle 原生规则（rawfile:// / https://）
 - **pipe 单向 mock**：`pattern pipe://pbmockx` 接管流量。请求体只记录、立刻转发（不 mock）。响应仅当 Content-Type 为 JSON/PB 且有 patch/map_local(data) 规则时才「解压 gzip/deflate/br → decode → 展开 Any → patch → 回包 Any → encode」（响应头取自 `req.headers`），返回未压缩 body 由 whistle 处理 content-encoding；否则按 chunk 透传。
 - **rulesServer 自动翻译**：map_remote / map_local(file) 规则自动翻译为 whistle 原生规则
-- **持久化规则**：rules.yaml 实时写回，map_local(data) 数据存外部 mock-data/ 文件
+- **持久化规则**：rules.yaml 实时写回 + 插件启动时自动加载，map_local(data) 数据存外部 mock-data/ 文件
 - **CLI + w2 exec + SKILL.md**，所有命令支持 `-h`/`--help`，多 agent 通用
 
 ## 安装
@@ -66,10 +66,15 @@ pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full]
                                                 #   --full           完整展开所有层级（不截断）
 
 # Mock — patch（按 path 改字段）
-pbmockx rules add 'api/game' game.name 测试     # patch 规则（PB/JSON 通用）
-pbmockx rules list [--type patch|map_local|map_remote]
+pbmockx rules add 'api/game' game.name 测试      # patch 规则（PB/JSON 通用）
+pbmockx rules add 'api/game' game.enabled false  # value 支持 JSON：bool/数字/对象/数组
+pbmockx rules add 'api/game' game.name --unset   # 删除该键（键从 body 消失）
+pbmockx rules add 'api/game' items --append '{"id":9}'   # repeated 条目：追加/插入/删除
+pbmockx rules add 'api/game' items --insert 1 '{"id":8}'
+pbmockx rules add 'api/game' items --remove 0
+pbmockx rules list [--type patch|map_local|map_remote]   # value 列：JSON.stringify 值 / (unset)
 pbmockx rules del <id>
-pbmockx rules save / reload
+pbmockx rules save / reload                      # 启动时自动加载；手动改 rules.yaml 后用 reload
 
 # Mock — map-local（整 body 替换）
 pbmockx map-local add 'api/game' --data '{"name":"test"}' [--desc <url>] [--messageType <type>]
@@ -87,7 +92,7 @@ w2 ca                                          # PC 证书
 # 工具维护
 pbmockx web                                    # 打开 whistle UI
 pbmockx doctor                                 # 全链路健康检查（含 npm link 状态）
-pbmockx fix                                    # 自动修复：rebuild→npm link→w2 restart→verify
+pbmockx fix                                    # 自动修复：总是 rebuild（tsc）→ npm link → w2 restart → verify
 pbmockx agent-doc                              # 打印 SKILL.md
 pbmockx skill install                          # 安装 SKILL.md 到 agent 目录（~/.agents + ~/.claude）
 pbmockx version [--check]                      # 版本 + 远程检查
@@ -98,12 +103,14 @@ pbmockx -h / --help                            # 顶层帮助
 pbmockx <command> -h / --help                  # 各命令的详细帮助（flows/decode/rules/map-local/map-remote/web/doctor/connect-android/version）
 ```
 
+> `rules add` 的 value 先按 JSON 解析（`int` / `bool` / `null` / 对象 / 数组），否则按字符串；`false` 与 `null` 会真实写入 body 并持久化到 `rules.yaml`（`0` / `''` / 对象 / 数组同样生效）。负数（如 `-1`）按 value 处理，set/append 缺 value 或未知 `--flag` 会报错并以退出码 1 结束（已知 flag：`--protocol` / `--append` / `--insert` / `--remove` / `--unset`）。`null` 是「键在、值为 `null`」，要删除键请用 `--unset`（键不存在）；`rules list` 的 value 列显示 `JSON.stringify` 后的值（`false`/`null` 原样）或 `(unset)`。
+
 ## 接入 agent
 - **opencode / Claude Code**：`pbmockx skill install` 自动装到 `~/.agents/skills/pbmockx/` 和 `~/.claude/skills/pbmockx/`
 - **其他 agent**：跑 `pbmockx agent-doc` 取使用说明注入 system prompt
 
 ## 文件
-- `whistle-plugin/` — whistle.pbmockx 插件（TS 源码 + CLI + PBView 子标签页）
+- `whistle-plugin/` — whistle.pbmockx 插件（TS 源码 + CLI + PBView 子标签页；inspectorsTab 只声明 `req`/`res` 两个子标签，都叫 PBView，无 `networkColumn`）
   - `src/pb-engine.ts` — PB 引擎（protobufjs + long，monkey-patch `fromDescriptor` 跳过 `resolveAll`，`addJSON` 加载 `descriptor.json` 等 WKT）
   - `src/any-expand.ts` — `google.protobuf.Any` 展开/回包（patch path 穿透 Any 字段时使用：按 `type_url` 解码 value bytes → 应用 patch → 重新编码为 bytes）
   - `src/flow-store.ts` — flow 存储（upsert by session ID，单 ID 同时持有 req+res，LRU 上限）
@@ -111,7 +118,7 @@ pbmockx <command> -h / --help                  # 各命令的详细帮助（flow
   - `src/resRead.ts` — 仅 JSON/PB 且有 mock 规则时 decode → 展开 Any → patch → 回包 Any → encode（响应头取自 `req.headers`）；否则透传记录
   - `src/rulesServer.ts` — map_remote/map_local(file) → whistle 原生规则
   - `src/uiServer/` — Koa CGI（规则 CRUD + flow 查询 + decode-pb）
-  - `public/pb-req.html` / `pb-res.html` — PBView 子标签页（Request/Response 各一份，JS 内联无外部脚本），通过 whistleBridge 的 `addSessionActiveListener` + `getActiveSession` 拉取 session body
+  - `public/pb-req.html` / `pb-res.html` — PBView 子标签页的薄 HTML（仅差 `<title>` 与 `window.__PBMOCKX_MODE`），共享 `public/pb-view.js`（**相对路径** `<script src="pb-view.js">` 引入；绝对 `/public/...` 会落到 whistle webui 404）。通过 whistleBridge 的 `addSessionActiveListener` + `getActiveSession` 拉取 session body，`POST /cgi-bin/decode-pb` 渲染字段树
   - `bin/cli.js` — Node.js CLI（支持 `-h`/`--help`，`decode` 默认折叠模式 + `--path`/`--full`）
   - `rules.txt` — 插件级规则（`* pipe://pbmockx`），加载插件时自动注入，全量 pipe 无需手写
 - `scripts/install.sh` — 一键安装（Node.js + whistle + 构建 + npm link + skill）；支持 `--update` / `--uninstall`
@@ -119,7 +126,7 @@ pbmockx <command> -h / --help                  # 各命令的详细帮助（flow
 - `rules.yaml.example` — 规则模板
 - `tests/test_server.ts` + `test_pb-engine.ts` — 测试（100% Node.js）
 
-> 已删除：`bin/pbmockx`（Python CLI）、`scripts/start.sh`、`addon/pbmockx_addon.py`、`scripts/start-mitmproxy.sh`、旧版 `public/pb-view.html` + `pb-view.js`（已合并进 `pb-req.html` / `pb-res.html`）。whistle `networkColumn`（PB Type 列）也已移除。
+> 已删除：`bin/pbmockx`（Python CLI）、`scripts/start.sh`、`addon/pbmockx_addon.py`、`scripts/start-mitmproxy.sh`、旧版内联 `public/pb-view.html`（已拆为 `pb-req.html` / `pb-res.html` 薄 HTML + 共享 `pb-view.js`）。whistle `networkColumn`（PB Type 列）也已移除。
 
 ## 与 Charles 对比
 | | Charles | pbmockx (whistle) |
