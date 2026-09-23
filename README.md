@@ -11,7 +11,7 @@ whistle 插件，抓包查看/修改 **protobuf + JSON** 数据，专为 AI agen
 - **PB + JSON 统一 mock**：
   - `patch`：按 path 改字段（PB message 对象层面操作，不走 JSON；path 可穿透 `google.protobuf.Any` 字段——pipe hook 自动展开/回包）
   - `map_local(data)`：dict → PB encode 整 body 替换
-  - `map_local(file)` / `map_remote`：whistle 原生规则（rawfile:// / https://），自动注入 whistle 规则库
+  - `map_local(file)` / `map_remote`：whistle 原生规则（file:// / https://），自动注入 whistle 规则库
 - **pipe 单向 mock**：`pattern pipe://pbmockx` 接管流量。请求体只记录、立刻转发（不 mock）。响应仅当 Content-Type 为 JSON/PB 且有 patch/map_local(data) 规则时才「解压 gzip/deflate/br → decode → 展开 Any → patch → 回包 Any → encode」（响应头取自 `req.headers`），返回未压缩 body 由 whistle 处理 content-encoding；否则按 chunk 透传。
 - **原生规则自动注入**：map_remote / map_local(file) 自动写入 whistle 规则库的 `pbmockx-native` 规则文件（whistle Web UI 可见），add/del/reload/插件启动时同步；whistle 2.10.x 不调用插件 rulesServer，插件直连 whistle CGI 完成注入
 - **持久化规则**：rules.yaml 实时写回 + 插件启动时自动加载，map_local(data) 数据存外部 mock-data/ 文件
@@ -78,7 +78,7 @@ pbmockx rules save / reload                      # 启动时自动加载；手�
 
 # Mock — map-local（整 body 替换）
 pbmockx map-local add 'api/game' --data '{"name":"test"}' [--desc <url>] [--messageType <type>]
-pbmockx map-local add 'api/game' --file /path/to/mock.pb    # whistle native rawfile://
+pbmockx map-local add 'api/game' --file /path/to/mock.pb    # whistle native file://
 pbmockx map-local list / del <id>
 
 # Mock — map-remote（请求重定向，whistle native）

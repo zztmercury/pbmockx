@@ -84,7 +84,7 @@ cd whistle-plugin && npx tsc --noEmit
 |---|---|---|---|
 | `patch` | resRead（pipe） | `path`, `value`, `protocol`, `action`(`set`/`append`/`insert`/`remove`/`unset`), `index` | 在 message 对象上按 path set 字段（path 可穿透 `google.protobuf.Any`——pipe hook 先 `expandAny` 再 patch 再 `packAny`），fromObject→encode；`action` 对 repeated 字段做条目级新增/插入/删除，`unset` 删除 path 键 |
 | `map_local` (data) | resRead（pipe） | `data_file`, `desc`, `messageType` | 整 body 替换为外部 JSON 文件，PB encode 后下发 |
-| `map_local` (file) | native-rules（whistle CGI 注入） | `file_path` | 翻译为 whistle `rawfile://` 原生规则，写入 whistle 规则库的 `pbmockx-native` 文件，由 whistle 替换 body |
+| `map_local` (file) | native-rules（whistle CGI 注入） | `file_path` | 翻译为 whistle `file://` 原生规则，写入 whistle 规则库的 `pbmockx-native` 文件，由 whistle 替换 body（**不要用 `rawfile://`**：>16KB 会空响应，见「关键陷阱」） |
 | `map_remote` | native-rules（whistle CGI 注入） | `replacement`, `is_regex` | 翻译为 whistle `https://` / 正则原生规则，写入 `pbmockx-native`，重写 url + Host |
 
 **执行顺序**：`map_remote(whistle 原生, request) → map_local file(whistle 原生, request) → map_local data(resRead, response) → patch(resRead, response)`。前两类在请求阶段由 whistle 原生规则处理（规则由 `native-rules.ts` 注入）；后两类在响应阶段由 pipe resRead 处理。
@@ -125,6 +125,7 @@ whistle 2.10.x **不会**为普通 HTTP 请求调用插件 `rulesServer`（该 h
 - 端口解析优先级：`PBMOCKX_WHISTLE_PORT` → `WHISTLE_PORT` → `options.config.uiport` → `options.config.port` → `8899`。测试时可用 `PBMOCKX_DISABLE_NATIVE_SYNC=1` 跳过全部同步。
 - 排障：whistle Web UI → Rules 里应能看到选中的 **`pbmockx-native`** 文件；CGI 返回 `native_sync: false` 时看 `native_sync_error`；`pbmockx rules reload` 可手动重同步。
 - **不要**在 whistle Rules 里写 `whistle.pbmockx://` 试图触发 rulesServer：2.10.x 上长协议只触发 hook（不转发请求），而每请求一次插件往返（16s 超时 × 多次重试）会拖慢甚至卡住请求；当前实现已不依赖该路径。
+- **`file://` 而不是 `rawfile://`**：whistle 的 `rawfile://` 会先把文件当"带内嵌 HTTP 头"解析（扫描 CRLFCRLF，上限 256KB），实测 >16KB 的响应会直接断连（客户端 `Empty reply from server`，64KB/100KB/1.4MB 均复现；1KB/16KB 正常）。`file://` 走流式 + Range 支持，1.4MB/10MB 实测字节一致。`toWhistleRules()` 因此固定输出 `file://`。
 
 ### pipe hook 的头与 body 位置（容易踩坑）
 - **resRead**：响应头在 `req.headers`（`req.originalRes.headers` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**——别去 `req.originalRes.headers` 拿 content-type/encoding）。响应体通过 `req` stream 传入（pipe hook 把它当作 HTTP 请求 body 接收）。

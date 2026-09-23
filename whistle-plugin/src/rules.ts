@@ -347,7 +347,11 @@ export class RuleEngine {
           lines.push(`${rule.urlPattern} https://${rule.replacement}`);
         }
       } else if (rule.type === 'map_local' && rule.source === 'file' && rule.filePath) {
-        lines.push(`${rule.urlPattern} rawfile://${rule.filePath}`);
+        // NOTE: must be `file://`, NOT `rawfile://` — whistle's rawfile handler
+        // (header-separator scan, MAX_HEADERS_SIZE) drops the response for files
+        // larger than ~16KB (empty reply); `file://` streams correctly (verified
+        // byte-identical at 1.4MB / 10MB).
+        lines.push(`${rule.urlPattern} file://${rule.filePath}`);
         if (rule.status) {
           lines.push(`${rule.urlPattern} statusCode://${rule.status}`);
         }

@@ -221,7 +221,7 @@ pbmockx map-local add '<url_regex>' --data '<json>'
 ```
 pbmockx map-local add '<url_regex>' --file <file_path>
 ```
-- 使用 whistle 原生 `rawfile://` 规则 —— 本地文件的原始字节直接成为响应 body。
+- 使用 whistle 原生 `file://` 规则 —— 本地文件的原始字节直接成为响应 body。
 - 规则自动注入 whistle 规则库（`pbmockx-native` 规则文件，Web UI → Rules 可见），
   add/del/`rules reload`/插件启动时自动同步；不需要手动写 whistle 规则。
 - 不会经过 PB 编码，适合你已经有现成 .pb / .json 文件的场景。
@@ -317,7 +317,7 @@ pbmockx rules reload                  # 从 rules.yaml 重新加载
 ### Map Local（body 替换）
 ```
 pbmockx map-local add <url_regex> --data '<json>' [--desc <url>] [--messageType <type>] [--delimited]
-pbmockx map-local add <url_regex> --file <file_path>    # whistle 原生 rawfile://
+pbmockx map-local add <url_regex> --file <file_path>    # whistle 原生 file://
 pbmockx map-local list
 pbmockx map-local del <id>
 ```

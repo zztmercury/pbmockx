@@ -3,7 +3,7 @@
  * map_remote and map_local(file) from rules.yaml.
  *
  * These rule types use whistle's native URL-rewrite (https://) and
- * file-replace (rawfile://) mechanisms, which are more efficient than
+ * file-replace (file://) mechanisms, which are more efficient than
  * handling them in the plugin. The rulesServer translates structured
  * rules from rules.yaml into whistle rule text.
  *
