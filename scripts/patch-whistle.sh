@@ -3,7 +3,11 @@ set -euo pipefail
 
 # patch-whistle.sh — patch installed whistle:
 #   1. Frontend bundle: custom inspector-tab hidden bug (whistle >= 2.10.8)
-#   2. load-plugin.js: CONNECT socket destroy-on-end RSTs unflushed pipe bytes
+#   2. load-plugin.js: pipe CONNECT socket teardown drops unflushed frames
+#      - <= 2.10.9: destroy-on-end RSTs unflushed pipe bytes
+#      - >= 2.10.10: premature socket.end() in the encoder 'finish' listener
+#        races the still-draining frame stream (intermittent 64KB-aligned tail
+#        loss on large responses); half-close is deferred until flushed
 #   3. lib/https/h2.js: reuse of a closed HTTP/2 session aborts the client request
 #
 # Background:
@@ -125,10 +129,14 @@ esac
 fi
 fi
 
-# --- Patch 2: pipe CONNECT socket destroy-on-end ---
-# emitHttpPipe used socket.on('end', destroySocket). Incoming FIN must not
-# RST the writable side; encoder.pipe(socket) already ends it when the
-# encoder readable finishes.
+# --- Patch 2: pipe CONNECT socket teardown ---
+# <= 2.10.9: emitHttpPipe used socket.on('end', destroySocket) — incoming FIN
+# must not RST the writable side.
+# >= 2.10.10: emitHttpPipe half-closes the socket directly in the encoder
+# 'finish' listener, before transproto's terminating frame is pushed and while
+# packed frames may still be draining under backpressure — the premature FIN
+# truncates large responses (still ending "cleanly"). Half-close is deferred
+# until encoder.readableLength and socket.writableLength are both zero.
 PLUGIN_JS="$WHISTLE_ROOT/lib/plugins/load-plugin.js"
 if [ ! -f "$PLUGIN_JS" ]; then
     warn "load-plugin.js not found: $PLUGIN_JS — skip pipe patch"
@@ -136,10 +144,10 @@ else
     PIPE_STATUS=$(node "$SCRIPT_DIR/patch-whistle-pipe.js" "$PLUGIN_JS")
     case "$PIPE_STATUS" in
         already-patched)
-            ok "whistle pipe socket already patched (no destroy on incoming end)"
+            ok "whistle pipe socket already patched (no unflushed-frame teardown)"
             ;;
         patched|upgraded)
-            ok "whistle pipe socket patched (no destroy on incoming end)"
+            ok "whistle pipe socket patched (no unflushed-frame teardown)"
             info "Restart whistle to pick up changes: w2 restart"
             ;;
         pattern-not-found)

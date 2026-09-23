@@ -451,10 +451,11 @@ operator: pipe://pbmockx
   （`whistle-plugin/rules.txt`，随插件自动注入）。排查：① `pbmockx rules list`
   确认规则在 `rules.yaml`；② `pbmockx rules reload` 后重试；③ 重启 whistle
   （`w2 restart`）让插件重新加载 rules.txt。
-- **大响应偶发被截断**（body 比预期短但 HTTP 200）：这是 whistle pipe
-  （`pipe://pbmockx`）的上游已知问题，与 mock 规则无关，纯透传也可能触发。
-  临时规避：给该 URL 加 whistle 原生规则 `<url> ignore://pipe`
-  （代价：该 URL 不再记录 flow）。PB/JSON 小响应不受影响。
+- **大响应偶发被截断**（body 比预期短但 HTTP 200）：whistle pipe 半关闭竞态，
+  已由 `pbmockx fix`（`scripts/patch-whistle-pipe.js`）修复——大响应透传实测
+  1.4MB/3.5MB/11.5MB 全量字节一致。若仍复现：先跑 `pbmockx fix` 重打补丁并
+  `w2 restart`；临时规避 `<url> ignore://pipe`（代价：该 URL 不再记录 flow）。
+  PB/JSON 小响应不受影响。
 
 ## 6. 备注
 - 所有 CLI 命令通过插件 CGI API：
