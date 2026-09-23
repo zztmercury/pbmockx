@@ -222,6 +222,8 @@ pbmockx map-local add '<url_regex>' --data '<json>'
 pbmockx map-local add '<url_regex>' --file <file_path>
 ```
 - 使用 whistle 原生 `rawfile://` 规则 —— 本地文件的原始字节直接成为响应 body。
+- 规则自动注入 whistle 规则库（`pbmockx-native` 规则文件，Web UI → Rules 可见），
+  add/del/`rules reload`/插件启动时自动同步；不需要手动写 whistle 规则。
 - 不会经过 PB 编码，适合你已经有现成 .pb / .json 文件的场景。
 
 **管理：**
@@ -237,6 +239,8 @@ pbmockx map-remote list
 pbmockx map-remote del <id>
 ```
 - 使用 whistle 原生 `https://` 规则 —— 匹配的请求被重定向到 `<replacement>`。
+- 规则自动注入 whistle 规则库（与 map-local file 同一个 `pbmockx-native` 文件），
+  add/del/插件启动时自动同步。
 - 整体 URL 模式：`<url_regex> → https://new.example.com/new`。
 - 正则模式（`--regex`）：`re.sub(url_regex, replacement, url)` —— 灵活的部分替换。
 - 适用于把测试环境请求指向 mock 服务器。
@@ -443,11 +447,18 @@ operator: pipe://pbmockx
 - **map_local data 文件丢失**：dict 模式数据存在 `mock-data/<id>.json`
   外部文件（不在 rules.yaml 内）。如果该文件被删，规则会失效 —— 重新
   `map-local add --data` 即可。
+- **map-local `--file` / map-remote 不生效**：规则会以 whistle 原生规则形式
+  注入 whistle 规则库的 `pbmockx-native` 文件。排查：① whistle Web UI → Rules
+  里是否有选中的 `pbmockx-native`；② CLI/CGI 返回的 `native_sync` 是否为
+  `false`（看 `native_sync_error`，常见原因是 whistle 端口非默认 —— 用
+  `PBMOCKX_WHISTLE_PORT=<port>` 重试）；③ 手动重新同步：`pbmockx rules reload`。
+  whistle 重启后插件会自动 resync，无需手工操作。
 
 ## 6. 备注
 - 所有 CLI 命令通过插件 CGI API：
   `http://127.0.0.1:<whistle_port>/plugin.pbmockx/cgi-bin/...`。
-  端口跟随 whistle 配置（默认 `http://127.0.0.1:8899`）。
+  端口跟随 whistle 配置（默认 `http://127.0.0.1:8899`）。插件同步 native 规则
+  时用同一端口（可用 `PBMOCKX_WHISTLE_PORT` 覆盖）。
 - 持续规则在抓包时生效；`decode` 显示（可能已 mock 的）
   解码数据。用 `--original` 查看 mock 前的数据。
 - PB `delimited=true` 响应解码为字段树数组；用 `[n]` 索引访问。

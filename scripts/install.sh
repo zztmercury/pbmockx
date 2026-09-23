@@ -92,6 +92,8 @@ exports.rules = '';
 PIPEOF
     w2 add "$PIPE_JS" --force 2>/dev/null || true
     rm -f "$PIPE_JS"
+    # Remove pbmockx-generated native whistle rules (best-effort; must not abort uninstall)
+    curl -s -m 3 -X POST "http://127.0.0.1:${WHISTLE_PORT:-8899}/cgi-bin/rules/remove" -H 'content-type: application/json' -d '{"name":"pbmockx-native"}' >/dev/null 2>&1 || true
     # Unregister plugin from whistle
     w2 uninstall whistle.pbmockx 2>/dev/null || true
     # Remove npm link (undo 'npm link')

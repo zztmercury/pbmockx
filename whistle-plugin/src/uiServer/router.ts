@@ -22,6 +22,7 @@ import { pbEngine, rules, flowStore, MOCK_DATA_DIR } from '../ctx';
 import { detect, parseForm } from '../content-type';
 import { buildFieldTree, renderTree, type MessageTree } from '../field-tree';
 import { MockRule } from '../rules';
+import { syncNativeRules } from '../native-rules';
 
 // Augment Koa for koa-bodyparser body access
 declare module 'koa' {
@@ -30,7 +31,18 @@ declare module 'koa' {
 
 const PUBLIC_DIR = path.join(__dirname, '..', '..', '..', 'public');
 
-export default function setupRouter(router: Router) {
+export default function setupRouter(router: Router, options?: any) {
+  /**
+   * Attach `native_sync` (+ `native_sync_error`) to a mutation response after
+   * pushing the refreshed native rules into whistle. Rules must already have
+   * been saved to rules.yaml by the caller.
+   */
+  async function withNativeSync(ctx: any, payload: any) {
+    const res = await syncNativeRules(options);
+    ctx.body = { ...payload, native_sync: res.ok };
+    if (!res.ok) ctx.body.native_sync_error = res.error;
+  }
+
   // --- static files from public/ (for inspectorsTab resources) ---
   router.get('/public/:filename', async (ctx) => {
     const fp = path.join(PUBLIC_DIR, ctx.params.filename);
@@ -175,33 +187,34 @@ export default function setupRouter(router: Router) {
     ctx.body = rules.list(type);
   });
 
-  router.post('/cgi-bin/rules', (ctx) => {
+  router.post('/cgi-bin/rules', async (ctx) => {
     const body = ctx.request.body as any;
     if (!body.url_pattern) { ctx.status = 400; ctx.body = { error: 'url_pattern required' }; return; }
     const rule = new MockRule(body);
     rules.add(rule);
     rules.save();
-    ctx.body = { ok: true, rule: rule.toDict() };
+    await withNativeSync(ctx, { ok: true, rule: rule.toDict() });
   });
 
-  router.delete('/cgi-bin/rules/:id', (ctx) => {
+  router.delete('/cgi-bin/rules/:id', async (ctx) => {
     const ok = rules.delete(ctx.params.id);
     if (ok) rules.save();
     ctx.status = ok ? 200 : 404;
-    ctx.body = { ok };
+    await withNativeSync(ctx, { ok });
   });
 
-  router.post('/cgi-bin/rules/save', (ctx) => {
-    ctx.body = { ok: rules.save() };
+  router.post('/cgi-bin/rules/save', async (ctx) => {
+    const ok = rules.save();
+    await withNativeSync(ctx, { ok });
   });
 
-  router.post('/cgi-bin/rules/reload', (ctx) => {
+  router.post('/cgi-bin/rules/reload', async (ctx) => {
     const n = rules.reload();
-    ctx.body = { ok: true, reloaded: n };
+    await withNativeSync(ctx, { ok: true, reloaded: n });
   });
 
   // --- map-local (with external data file) ---
-  router.post('/cgi-bin/map-local', (ctx) => {
+  router.post('/cgi-bin/map-local', async (ctx) => {
     const body = ctx.request.body as any;
     if (!body.url_pattern) { ctx.status = 400; ctx.body = { error: 'url_pattern required' }; return; }
 
@@ -234,7 +247,7 @@ export default function setupRouter(router: Router) {
     const rule = new MockRule(ruleData);
     rules.add(rule);
     rules.save();
-    ctx.body = { ok: true, rule: rule.toDict() };
+    await withNativeSync(ctx, { ok: true, rule: rule.toDict() });
   });
 
   // --- flows clear ---

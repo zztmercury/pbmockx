@@ -11,15 +11,16 @@ whistle (:8899, Node.js)  ──加载──►  whistle.pbmockx 插件（进程
                                               ├─ reqRead（透传 + 记录请求体，不 mock、不阻塞）
                                               ├─ resRead（仅 JSON/PB 且有 patch/map_local(data) 才 buffer→decode→patch→encode；否则透传记录）
                                               ├─ resWrite/reqWrite hook（passthrough）
-                                              ├─ rulesServer（map_remote/map_local file → whistle 原生规则）
-                                              └─ uiServer（Koa CGI，规则 CRUD + flow 查询 + decode-pb）
+                                              ├─ rulesServer（legacy hook：whistle 2.10.x 对普通 HTTP 不触发）
+                                              ├─ native-rules.ts（map_remote/map_local file → 直连 whistle CGI 注入 `pbmockx-native` 规则文件）
+                                              └─ uiServer（Koa CGI，规则 CRUD + flow 查询 + decode-pb + native 规则同步）
 
 pbmockx CLI（whistle-plugin/bin/cli.js）  ──HTTP──►  uiServer CGI（/cgi-bin/*）
   通过 w2 exec pbmockx 或 npm link 后直接 pbmockx 调用
 ```
 
 - **whistle** 是宿主进程（默认 :8899），通过 `whistleConfig`（package.json）声明 `inspectorsTab`——只有 `req` 和 `res` 两个子 tab，都命名为 `"PBView"`，action 指向 `/public/pb-req.html` 与 `/public/pb-res.html`。**没有 `networkColumn`**（已按用户要求移除），也没有顶层 `name`/`action` 字段。
-- **whistle.pbmockx** 插件由 `whistle-plugin/index.js` 导出 6 个 hook（resRead/reqRead/resWrite/reqWrite/rulesServer/uiServer）。所有 hook 共享同一 Node 进程，模块级单例（`src/ctx.ts`）提供 `PBEngine`、`RuleEngine`、`FlowStore` 实例。
+- **whistle.pbmockx** 插件由 `whistle-plugin/index.js` 导出 6 个 hook（resRead/reqRead/resWrite/reqWrite/rulesServer/uiServer）。所有 hook 共享同一 Node 进程，模块级单例（`src/ctx.ts`）提供 `PBEngine`、`RuleEngine`、`FlowStore` 实例。**注意**：`rulesServer` 在 whistle 2.10.x 对普通 HTTP 请求不会被调用（只对 websocket/tunnel/显式插件协议生效），因此 `map_remote`/`map_local(file)` 的实际生效路径是 `src/native-rules.ts`（直连 whistle CGI 注入原生规则，见「关键陷阱」）。
 - `whistle-plugin/src/*.ts` 编译到 `dist/src/`（tsc）。`index.js` 用 `require('./dist/src/<name>').default` 加载，try/catch 隔离单个 hook 失败。
 - `whistle-plugin/public/` 是 inspectorsTab 的 HTML——`pb-req.html` 与 `pb-res.html`（薄 HTML）+ 共享 `pb-view.js`。两 HTML 仅差 `<title>` 与 `window.__PBMOCKX_MODE`（'req'/'res'），其余 CSS+JS 共享。**外部 JS 用相对路径加载**（`<script src="pb-view.js">`）——whistle 把 `/plugin.pbmockx/public/x` 请求剥前缀转发给插件 uiServer 的 `/public/:filename` 路由 serve（**不能用绝对路径 `/public/x`**，会落到 whistle webui 404）。HTML 内通过 `whistleBridge` 拉取 session body，POST 到 `/cgi-bin/decode-pb` CGI 渲染字段树。
 - **pipe hook 接收的 body 即 HTTP 请求 body**：resRead 里响应体通过 `req` stream 传入，**响应头在 `req.headers`**（`req.originalRes` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**）；reqRead 里请求头在 `req.headers`，请求体同样通过 `req` stream 传入。
@@ -27,7 +28,7 @@ pbmockx CLI（whistle-plugin/bin/cli.js）  ──HTTP──►  uiServer CGI（
 - **Any 展开/回包**（`src/any-expand.ts`）：patch 前对包含 `google.protobuf.Any` 字段的 message 调用 `expandAny`，按 `type_url` 在 root 里查类型、把 `value` bytes 解码为内层 message 对象（替换原 Any 字段为展开后的 message）；patch path 可直接导航到内层业务字段（如 `data.value.list[0].app.title`，`data` 是 Any，`value` 是内层 message）。patch 完成后调用 `packAny` 把展开的 message 重新编码为 bytes、包回 Any。**不修改 `@type` / `type_url`**。
 - `whistle-plugin/bin/cli.js` 是 CLI 入口（package.json 的 `"bin": {"pbmockx": "./bin/cli.js"}`）。`w2 exec pbmockx <cmd>` 或 npm link 后直接 `pbmockx <cmd>`。所有命令支持 `-h`/`--help`。
 - **`whistle-plugin/rules.txt`** 是插件级规则文件（`* pipe://pbmockx`）——whistle 加载插件时自动注入，**无需用户在 Web UI 里手写 `pipe://pbmockx` 规则**。所有请求默认走 pipe；请求体只记录不 mock，响应仅 JSON/PB 且有 mock 规则才 decode→patch→encode。用户想选择性 pipe 时，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则覆盖。
-- `scripts/install.sh` 检查 Node.js≥18 → 检查/安装 whistle → 构建插件（tsc）→ `npm link`（让插件全局可用，`w2 start` 自动加载）→ 重启 whistle 加载插件 + rules.txt → skill install。`--uninstall` 反向清理：清旧 w2 add 规则 + `w2 uninstall` + `npm unlink -g` + `pbmockx skill uninstall` + 删除克隆仓库。**不检查 lack**（dev-only 工具）。
+- `scripts/install.sh` 检查 Node.js≥18 → 检查/安装 whistle → 构建插件（tsc）→ `npm link`（让插件全局可用，`w2 start` 自动加载）→ 重启 whistle 加载插件 + rules.txt → skill install。`--uninstall` 反向清理：清旧 w2 add 规则 + 删除 `pbmockx-native` 原生规则文件（whistle CGI，best-effort）+ `w2 uninstall` + `npm unlink -g` + `pbmockx skill uninstall` + 删除克隆仓库。**不检查 lack**（dev-only 工具）。
 - **已删除的文件**（历史版本曾有）：`bin/pbmockx`（旧 Python CLI）、`scripts/start.sh`（旧 mitmproxy 启动脚本）、`addon/pbmockx_addon.py`（Python mitmproxy addon）、`scripts/start-mitmproxy.sh`（mitmproxy fallback 启动）、`whistle-plugin/public/pb-view.html`（旧独立页面，已废弃）。注：`pb-view.js` 曾被内联进 HTML，后又拆出为共享外部 JS（见上条）。
 
 ## 命令
@@ -83,10 +84,10 @@ cd whistle-plugin && npx tsc --noEmit
 |---|---|---|---|
 | `patch` | resRead（pipe） | `path`, `value`, `protocol`, `action`(`set`/`append`/`insert`/`remove`/`unset`), `index` | 在 message 对象上按 path set 字段（path 可穿透 `google.protobuf.Any`——pipe hook 先 `expandAny` 再 patch 再 `packAny`），fromObject→encode；`action` 对 repeated 字段做条目级新增/插入/删除，`unset` 删除 path 键 |
 | `map_local` (data) | resRead（pipe） | `data_file`, `desc`, `messageType` | 整 body 替换为外部 JSON 文件，PB encode 后下发 |
-| `map_local` (file) | rulesServer（whistle 原生） | `file_path` | 翻译为 whistle `file://` 原生规则，由 whistle 替换 body |
-| `map_remote` | rulesServer（whistle 原生） | `replacement`, `is_regex` | 翻译为 whistle `xxx://` 原生规则，重写 url + Host |
+| `map_local` (file) | native-rules（whistle CGI 注入） | `file_path` | 翻译为 whistle `rawfile://` 原生规则，写入 whistle 规则库的 `pbmockx-native` 文件，由 whistle 替换 body |
+| `map_remote` | native-rules（whistle CGI 注入） | `replacement`, `is_regex` | 翻译为 whistle `https://` / 正则原生规则，写入 `pbmockx-native`，重写 url + Host |
 
-**执行顺序**：`map_remote(rulesServer, request) → map_local file(whistle 原生, request) → map_local data(resRead, response) → patch(resRead, response)`。前两类在请求阶段由 whistle 原生规则处理；后两类在响应阶段由 pipe resRead 处理。
+**执行顺序**：`map_remote(whistle 原生, request) → map_local file(whistle 原生, request) → map_local data(resRead, response) → patch(resRead, response)`。前两类在请求阶段由 whistle 原生规则处理（规则由 `native-rules.ts` 注入）；后两类在响应阶段由 pipe resRead 处理。
 
 - **rules.yaml** 存储所有规则（js-yaml 读写）。启动时加载（`RuleEngine.reload`），add/del 时自动保存（`RuleEngine.save`）。`.gitignore` 排除 `rules.yaml`（运行时生成），仓库里有 `rules.yaml.example` 作为模板。
 - **map_local data** 的 mock 数据存在 `whistle-plugin/mock-data/<id>.json` 外部文件，规则里只存 `data_file` 引用。`.gitignore` 排除 `mock-data/`。
@@ -110,11 +111,20 @@ map_local(data) 需要 `desc`（.proto 描述符 base64 或文件路径）+ `mes
 Patch 不再走 dict→JSON→re-encode。直接在 `decodeDelimited` 返回的 message 对象上 `set_by_path`，再 `encodeDelimited`。`fromObject` 会做类型强转（字符串数字→number），但仍受 PB 类型约束（int64 不能传非数字字符串）。规则序列化（`toDict()`）**只过滤 `undefined`**——`false` / `null` 会真实写入 body 并持久化到 rules.yaml（`0`/`''`/对象/数组亦然）。删除键用 `action: unset`：`null` = 键存在且值为 `null`，`unset` = 键不存在，二者语义不同。
 
 ### pipe 只对匹配 `pattern pipe://pbmockx` 的请求触发
-resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 pattern 生效**。插件加载时通过 `rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，所以默认所有请求都走 pipe；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。未走 pipe 的请求，patch/map_local(data) 不生效（但 map_remote/map_local(file) 仍由 rulesServer 原生规则处理）。
+resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 pattern 生效**。插件加载时通过 `rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，所以默认所有请求都走 pipe；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。未走 pipe 的请求，patch/map_local(data) 不生效（但 map_remote/map_local(file) 由 native-rules 注入的原生规则处理，与 pipe 无关）。
 
 **请求体永不 mock、不阻塞**：reqRead 按 chunk 立刻转发并旁路记录 raw body（`tapAndPassthrough`），decode 只在 CLI/`decode --req` 时按需做。reqWrite 一律透传。
 
-**响应只在 JSON/PB + 有 mock 规则时才 buffer**：resRead 看 `Content-Type` 是否 JSON/PB，且 `hasDataRules(url)`（patch / map_local data）。命中才 `readBody` → decode → patch → encode；否则按 chunk 透传并旁路记录。SSE 永远 `passthroughPipe`。map_remote / map_local(file) 不走 pipe mock 路径。
+**响应只在 JSON/PB + 有 mock 规则时才 buffer**：resRead 看 `Content-Type` 是否 JSON/PB，且 `hasDataRules(url)`（patch / map_local data）。命中才 `readBody` → decode → patch → encode；否则按 chunk 透传并旁路记录。SSE 永远 `passthroughPipe`。map_remote / map_local(file) 不走 pipe mock 路径（由 whistle 原生规则在请求阶段处理，响应根本到不了 pipe）。
+
+### map_local(file) / map_remote 依赖 native 规则注入（不是 rulesServer）
+whistle 2.10.x **不会**为普通 HTTP 请求调用插件 `rulesServer`（该 hook 只在 websocket / tunnel / 显式插件协议时触发），所以 `toWhistleRules()` 的输出改由 `src/native-rules.ts` 直连 whistle CGI 注入：
+
+- 注入：`POST /cgi-bin/rules/add`，body `{name: 'pbmockx-native', value: <规则文本>, selected: true}`；清空用 `/cgi-bin/rules/remove`。**`selected: true` 必传**——否则规则文件落盘但不启用（实测踩坑）。
+- 同步时机：uiServer 所有**变更类** CGI（rules add/del/save/reload、map-local、map-remote）之后返回 `native_sync` 字段；插件启动 500ms 后 best-effort resync（修复 whistle 重启 / 手工删规则造成的漂移）；`install.sh --uninstall` 会清理该规则文件。
+- 端口解析优先级：`PBMOCKX_WHISTLE_PORT` → `WHISTLE_PORT` → `options.config.uiport` → `options.config.port` → `8899`。测试时可用 `PBMOCKX_DISABLE_NATIVE_SYNC=1` 跳过全部同步。
+- 排障：whistle Web UI → Rules 里应能看到选中的 **`pbmockx-native`** 文件；CGI 返回 `native_sync: false` 时看 `native_sync_error`；`pbmockx rules reload` 可手动重同步。
+- **不要**在 whistle Rules 里写 `whistle.pbmockx://` 试图触发 rulesServer：2.10.x 上长协议只触发 hook（不转发请求），而每请求一次插件往返（16s 超时 × 多次重试）会拖慢甚至卡住请求；当前实现已不依赖该路径。
 
 ### pipe hook 的头与 body 位置（容易踩坑）
 - **resRead**：响应头在 `req.headers`（`req.originalRes.headers` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**——别去 `req.originalRes.headers` 拿 content-type/encoding）。响应体通过 `req` stream 传入（pipe hook 把它当作 HTTP 请求 body 接收）。
