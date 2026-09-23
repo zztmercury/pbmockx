@@ -222,8 +222,8 @@ pbmockx map-local add '<url_regex>' --data '<json>'
 pbmockx map-local add '<url_regex>' --file <file_path>
 ```
 - 使用 whistle 原生 `file://` 规则 —— 本地文件的原始字节直接成为响应 body。
-- 规则自动注入 whistle 规则库（`pbmockx-native` 规则文件，Web UI → Rules 可见），
-  add/del/`rules reload`/插件启动时自动同步；不需要手动写 whistle 规则。
+- 规则由插件 rulesServer 每请求动态生成（whistle 自动触发，无需配置）；
+  改完规则下一个请求即生效，不需要任何同步操作。
 - 不会经过 PB 编码，适合你已经有现成 .pb / .json 文件的场景。
 
 **管理：**
@@ -239,8 +239,7 @@ pbmockx map-remote list
 pbmockx map-remote del <id>
 ```
 - 使用 whistle 原生 `https://` 规则 —— 匹配的请求被重定向到 `<replacement>`。
-- 规则自动注入 whistle 规则库（与 map-local file 同一个 `pbmockx-native` 文件），
-  add/del/插件启动时自动同步。
+- 规则由插件 rulesServer 每请求动态生成（与 map-local file 同一机制）。
 - 整体 URL 模式：`<url_regex> → https://new.example.com/new`。
 - 正则模式（`--regex`）：`re.sub(url_regex, replacement, url)` —— 灵活的部分替换。
 - 适用于把测试环境请求指向 mock 服务器。
@@ -447,18 +446,20 @@ operator: pipe://pbmockx
 - **map_local data 文件丢失**：dict 模式数据存在 `mock-data/<id>.json`
   外部文件（不在 rules.yaml 内）。如果该文件被删，规则会失效 —— 重新
   `map-local add --data` 即可。
-- **map-local `--file` / map-remote 不生效**：规则会以 whistle 原生规则形式
-  注入 whistle 规则库的 `pbmockx-native` 文件。排查：① whistle Web UI → Rules
-  里是否有选中的 `pbmockx-native`；② CLI/CGI 返回的 `native_sync` 是否为
-  `false`（看 `native_sync_error`，常见原因是 whistle 端口非默认 —— 用
-  `PBMOCKX_WHISTLE_PORT=<port>` 重试）；③ 手动重新同步：`pbmockx rules reload`。
-  whistle 重启后插件会自动 resync，无需手工操作。
+- **map-local `--file` / map-remote 不生效**：规则由插件 rulesServer 动态生成，
+  触发条件是 whistle 已加载插件规则文件里的 `* whistle.pbmockx://`
+  （`whistle-plugin/rules.txt`，随插件自动注入）。排查：① `pbmockx rules list`
+  确认规则在 `rules.yaml`；② `pbmockx rules reload` 后重试；③ 重启 whistle
+  （`w2 restart`）让插件重新加载 rules.txt。
+- **大响应偶发被截断**（body 比预期短但 HTTP 200）：这是 whistle pipe
+  （`pipe://pbmockx`）的上游已知问题，与 mock 规则无关，纯透传也可能触发。
+  临时规避：给该 URL 加 whistle 原生规则 `<url> ignore://pipe`
+  （代价：该 URL 不再记录 flow）。PB/JSON 小响应不受影响。
 
 ## 6. 备注
 - 所有 CLI 命令通过插件 CGI API：
   `http://127.0.0.1:<whistle_port>/plugin.pbmockx/cgi-bin/...`。
-  端口跟随 whistle 配置（默认 `http://127.0.0.1:8899`）。插件同步 native 规则
-  时用同一端口（可用 `PBMOCKX_WHISTLE_PORT` 覆盖）。
+  端口跟随 whistle 配置（默认 `http://127.0.0.1:8899`）。
 - 持续规则在抓包时生效；`decode` 显示（可能已 mock 的）
   解码数据。用 `--original` 查看 mock 前的数据。
 - PB `delimited=true` 响应解码为字段树数组；用 `[n]` 索引访问。

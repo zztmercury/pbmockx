@@ -478,17 +478,6 @@ function hasHelp(args) { return args.includes('-h') || args.includes('--help'); 
 
 // --- Output helpers ---
 
-/**
- * Warn (stderr) when the CGI could not push native whistle rules. The change is
- * still persisted in rules.yaml, so it re-syncs on the next rules change or on
- * whistle restart.
- */
-function warnNativeSync(result) {
-  if (!result || result.native_sync !== false) return;
-  const err = result.native_sync_error ? ' (' + result.native_sync_error + ')' : '';
-  console.error('Warning: native whistle rules not synced' + err + '. They will re-sync on next rules change or whistle restart.');
-}
-
 function printTable(rows, headers) {
   if (!rows || rows.length === 0) { console.log('(none)'); return; }
   const keys = headers || Object.keys(rows[0]);
@@ -628,7 +617,6 @@ async function cmd_rules(args) {
 
     const result = await _req('POST', '/cgi-bin/rules', rule);
     console.log('Rule added:', result.rule.id, result.rule.url_pattern, result.rule.path, '=>', _renderRuleValue(result.rule, parsed.action));
-    warnNativeSync(result);
   } else if (sub === 'list') {
     const typeIdx = args.indexOf('--type');
     const type = typeIdx >= 0 ? args[typeIdx + 1] : undefined;
@@ -649,15 +637,12 @@ async function cmd_rules(args) {
     if (!id) { console.error('Usage: pbmockx rules del <id>'); process.exit(1); }
     const result = await _req('DELETE', '/cgi-bin/rules/' + id);
     console.log('Deleted:', result.ok);
-    warnNativeSync(result);
   } else if (sub === 'save') {
     const result = await _req('POST', '/cgi-bin/rules/save', {});
     console.log('Saved:', result.ok);
-    warnNativeSync(result);
   } else if (sub === 'reload') {
     const result = await _req('POST', '/cgi-bin/rules/reload', {});
     console.log('Reloaded:', result.reloaded, 'rules');
-    warnNativeSync(result);
   } else {
     helpRules();
   }
@@ -685,7 +670,6 @@ async function cmd_map_local(args) {
     if (statusIdx >= 0) rule.status = parseInt(args[statusIdx + 1], 10);
     const result = await _req('POST', '/cgi-bin/map-local', rule);
     console.log('Map local added:', result.rule.id, result.rule.url_pattern);
-    warnNativeSync(result);
   } else if (sub === 'list') {
     const data = await _req('GET', '/cgi-bin/rules?type=map_local');
     printTable(data.map(r => ({ id: r.id, url: (r.url_pattern || '').slice(0, 50), source: r.source || '', file: (r.file_path || r.data_file || '').slice(0, 40) })));
@@ -693,7 +677,6 @@ async function cmd_map_local(args) {
     const id = args.find(a => !a.startsWith('-') && a !== 'del');
     const result = await _req('DELETE', '/cgi-bin/rules/' + id);
     console.log('Deleted:', result.ok);
-    warnNativeSync(result);
   } else {
     helpMapLocal();
   }
@@ -709,7 +692,6 @@ async function cmd_map_remote(args) {
     const rule = { type: 'map_remote', url_pattern: url, replacement, is_regex: args.includes('--regex') };
     const result = await _req('POST', '/cgi-bin/rules', rule);
     console.log('Map remote added:', result.rule.id, result.rule.url_pattern, '=>', result.rule.replacement);
-    warnNativeSync(result);
   } else if (sub === 'list') {
     const data = await _req('GET', '/cgi-bin/rules?type=map_remote');
     printTable(data.map(r => ({ id: r.id, url: (r.url_pattern || '').slice(0, 50), replacement: (r.replacement || '').slice(0, 50), regex: r.is_regex ? 'Y' : '' })));
@@ -717,7 +699,6 @@ async function cmd_map_remote(args) {
     const id = args.find(a => !a.startsWith('-') && a !== 'del');
     const result = await _req('DELETE', '/cgi-bin/rules/' + id);
     console.log('Deleted:', result.ok);
-    warnNativeSync(result);
   } else {
     helpMapRemote();
   }
