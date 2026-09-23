@@ -5,6 +5,25 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.8] - 2026-09-23
+
+### 修复
+- **`map_local(file)` / `map_remote` 完全不生效（P0）**：这两种规则依赖插件 `rulesServer` hook 生成 whistle 原生规则，但 whistle（2.10.x）只对命中「插件协议」规则的请求调用 `rulesServer`——插件此前从未提供该触发规则，于是规则静默失效（表现为 mock 不生效、请求打到真实网络）。现在 `rules.txt` 自动注入 `* whistle.pbmockx://`（**长协议**：只触发 hook，不转发/改写请求），whistle 每请求调用一次 `rulesServer`，动态合并 `toWhistleRules()` 生成的原生规则（`file://` / `https://` / `statusCode://`，优先级高于全局规则）。规则即改即生效，无需任何同步步骤。
+- **`map_local(file)` 大文件空响应 / 截断**：此前生成 whistle `rawfile://` 规则；whistle 的 rawfile handler 会把文件当「带内嵌 HTTP 头」解析（扫描 CRLFCRLF，上限 256KB），实测 >16KB 的文件直接断连（客户端 `Empty reply from server`；1KB/16KB 正常，64KB/100KB/1.4MB 复现）。改用 `file://`（流式 + 支持 Range），1.4MB / 10MB / 40MB 实测字节一致。
+- **`rulesServer` 加固**：handler 用 try/catch 包裹并保证任何分支都 `res.end()`——whistle 对 rules 请求有 16s 超时 + 多次重试，一次抛错会拖住请求。
+
+### 变更
+- **移除「直连 whistle CGI 注入规则文件」方案**（开发中短暂实现过，未发布）：whistle 默认 `multiSelect: false`，规则文件是**单选**——注入 `pbmockx-native` 会把用户已选的规则文件挤掉（实测：选中 A 即取消选中 B），静默禁用用户自己的 whistle 规则；用户改选自己的文件又会让 mock 静默失效。现在 `map_remote` / `map_local(file)` 由 `rulesServer` 单一路径负责，不再触碰 whistle 规则文件。
+- `scripts/install.sh --uninstall` 保留对遗留 `pbmockx-native` 规则文件的兜底清理（旧方案产物）。
+
+### 已知问题（上游，未修）
+- **大响应经 pipe 偶发丢尾字节**：响应经过 `pipe://pbmockx` 且体积较大时，whistle 主进程侧会间歇性截断 body（HTTP 200 + 正常结束但字节数偏短）。纯透传（无 mock）也可复现：1.4MB 12 次触发 4~6 次；`ignore://pipe` 后 12/12 正常。临时插桩确认插件侧收到完整字节，丢包位于 whistle↔插件 socket 转发链路；本机 whistle 2.10.10 未应用 `scripts/patch-whistle.sh` 的补丁（旧补丁 pattern 已因上游重构失效）。临时规避：给对应 URL 加 `ignore://pipe`（代价：该 URL 不再记录 flow）。大文件 mock 实测：1.4MB~40MB 15/15 字节一致。
+
+### 验证
+- 单测 40/40；`tsc` 通过。
+- mock 实测：5 个真实 zip（1.4MB / 1.5MB / 3.5MB / 11.5MB / 40.5MB）各 3 轮，15/15 字节一致。
+- 透传实测：同批 zip 各 3 轮，12 次中 2 次截断（上游 pipe 问题，见「已知问题」）。
+
 ## [0.6.7] - 2026-09-16
 
 ### 修复
