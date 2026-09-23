@@ -1,6 +1,6 @@
 {
   "name": "whistle.pbmockx",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "description": "Protobuf & JSON mock plugin for whistle — decode/patch/encode with field-tree viewer",
   "license": "MIT",
   "repository": {

@@ -5,6 +5,20 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.9] - 2026-09-23
+
+### 修复
+- **大响应经 pipe 偶发丢尾字节（P0）**：纯透传的大响应会间歇性截断——客户端拿到 HTTP 200 + chunked 正常终止，但 body 比原文件短（丢失量为整数个 64KB 帧；实测 1.4MB 响应 5/12、3.5MB 2/6 触发；`file://` mock 与 `ignore://pipe` 不经该链路，一直正常）。根因在 whistle 2.10.10 的 `lib/plugins/load-plugin.js` `emitHttpPipe`：`encoder.pipe(socket)` 在 `socket.write()` 返回 false 时会把 encoder **pause**，已打包的帧（含终止帧 `\n0\n`）滞留在 `encoder.readableLength`；`'finish'` 监听同步调用 `socket.end()`，pause 中的帧永远写不出去、socket 队列里的字节也被 FIN 截掉。对端 decoder 收到 FIN 就无条件 `push(null)`（不校验终止帧），主进程把截断当正常结束，所以表现为「干净结束但字节少」。
+- `scripts/patch-whistle-pipe.js`（v2，marker `pbmockx-pipe-flush`）现在会在 finish 时 `resume()` 被 pause 的 encoder，等 `encoder.readableLength === 0 && socket.writableLength === 0` 再 `socket.end()`；同时保留对 ≤2.10.9 旧版 `socket.on('end', destroySocket)` 的处理（v1）。补丁幂等，备份为 `load-plugin.js.pbmockx-pipe-bak`。
+
+### 验证
+- 修复前：1.4MB 透传 5/12、3.5MB 2/6 截断；修复后：1.4MB 20/20、3.5MB 8/8、11.5MB 3/3 字节一致。
+- 回归：`file://` mock（1.4MB~40MB）、patch、map_local(data)、1.4MB POST（reqRead）、SSE 50/50、小响应 50/50 全部通过。
+- `pbmockx fix` / `install.sh` 自动重打补丁；whistle 升级后需重跑（`pbmockx fix`）。
+
+### 备注
+- 上游 whistle 2.10.10 已有的 `socket.end()` 修复解决了上一代「收到 FIN 即 destroy、RST 未刷出字节」的问题；本次是其**引入**的另一处竞态（上游暂无记录）。
+
 ## [0.6.8] - 2026-09-23
 
 ### 修复
