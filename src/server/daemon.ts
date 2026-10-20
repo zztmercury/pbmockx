@@ -13,8 +13,10 @@ import * as path from 'path';
 import {
   clearRuntime,
   ensureDirs,
+  isLocalHostname,
   isLoopbackAddress,
   loadConfig,
+  localAddresses,
   packageRoot,
   paths,
   readVersion,
@@ -49,18 +51,13 @@ export interface DaemonHandle {
   close: () => Promise<void>;
 }
 
-function isLoopbackHost(host: string): boolean {
-  const h = (host || '').toLowerCase().replace(/^\[|\]$/g, '');
-  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h.startsWith('127.');
-}
-
 function isLocalRequest(req: http.IncomingMessage, config: PbmockxConfig): boolean {
   const raw = req.url || '/';
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
     try {
       const u = new URL(raw);
       const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
-      return isLoopbackHost(u.hostname) && port === config.port;
+      return isLocalHostname(u.hostname) && port === config.port;
     } catch {
       return false;
     }
@@ -69,7 +66,7 @@ function isLocalRequest(req: http.IncomingMessage, config: PbmockxConfig): boole
   const m = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec(host);
   const hostname = m ? m[1] : host;
   const port = m && m[2] ? Number(m[2]) : 80;
-  return isLoopbackHost(hostname) && port === config.port;
+  return isLocalHostname(hostname) && port === config.port;
 }
 
 function importLegacyState(p: PbmockxPaths): void {
@@ -151,9 +148,12 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<DaemonHandl
 
   const server = http.createServer((req, res) => {
     if (isLocalRequest(req, config)) {
-      if (!isLoopbackAddress(req.socket.remoteAddress)) {
+      const remoteIsLoopback = isLoopbackAddress(req.socket.remoteAddress);
+      const localPath = (req.url || '').split('?')[0];
+      const isCaDownload = localPath === '/__pbmockx/api/ca.pem' || localPath === '/cgi-bin/rootca';
+      if (!remoteIsLoopback && !config.ui.lanAccess && !isCaDownload) {
         res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
-        res.end('pbmockx: management API and UI are loopback-only\n');
+        res.end('pbmockx: LAN access is disabled. Set ui.lanAccess=true (or start with --lan) to use the UI from this device.\n');
         return;
       }
       api(req, res)
@@ -209,10 +209,19 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<DaemonHandl
     dataDir: p.dataDir,
   });
 
+  const lan = localAddresses();
   log.info(
     `pbmockxd v${version} listening on ${config.host}:${config.port} ` +
     `(proxy + UI) | ${flowStore.size()} flows | ${ruleCount} rules | data ${p.dataDir}`
   );
+  if (config.host === '0.0.0.0' || config.host === '::') {
+    if (lan.length) log.info(`LAN: proxy ${lan[0]}:${config.port} | UI http://${lan[0]}:${config.port}/`);
+    if (config.ui.lanAccess) {
+      log.warn('LAN access enabled: devices on this network can open the UI and read captured traffic.');
+    } else {
+      log.info('LAN UI access disabled (ui.lanAccess=false); proxy is still reachable.');
+    }
+  }
 
   let closed = false;
   const close = async (): Promise<void> => {

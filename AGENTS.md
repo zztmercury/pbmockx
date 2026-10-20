@@ -8,7 +8,7 @@
 
 ```
 pbmockx CLI ──HTTP──► pbmockxd :8899
-                        ├─ /__pbmockx/api/*   控制 API（仅 loopback）
+                        ├─ /__pbmockx/api/*   控制 API（默认 loopback，可开放 LAN）
                         ├─ /                  静态 Web UI（web/）
                         ├─ CONNECT / 绝对 URL  正向代理 + TLS MITM
                         ├─ mock engine（rules.yaml + mock-data/）
@@ -17,8 +17,9 @@ client / Android / curl ──proxy──► pbmockxd ──► upstream
 ```
 
 - 入口：`bin/pbmockx.js`（CLI → `dist/src/cli/index`）、`bin/pbmockxd.js`（前台守护进程 → `dist/src/server/daemon`）。
-- 单端口路由优先级（`src/server/daemon.ts`）：`CONNECT` → 绝对 URL（代理）→ loopback origin-form（API/UI）→ 其余 origin-form（按 Host 转发）。
-- 控制 API 与 UI 只接受 loopback 来源；即使代理绑定 `0.0.0.0`，管理面也不会暴露到局域网。
+- 单端口路由优先级（`src/server/daemon.ts`）：`CONNECT` → 绝对 URL（代理）→ 本机 origin-form（API/UI；loopback/LAN IP/hostname）→ 其余 origin-form（按 Host 转发）。
+- 默认绑定 loopback。绑定 `0.0.0.0`/`--lan` 后，代理、UI、控制 API 都可从 LAN 访问；`ui.lanAccess=false` 时非 loopback 只能访问代理和 CA 下载端点。
+- 本地请求判定用 `isLocalHostname()`（loopback / 本机网卡 IPv4 / hostname / hostname.local）；不要只判断 `127.0.0.1`，否则 LAN 打开 UI 会被当成代理目标。
 - 端口默认 8899（兼容旧 Android `adb reverse`/系统代理配置）；`PBMOCKX_PORT` / `config.json` 可改。
 - 所有可写运行时状态都在数据目录 `~/.pbmockx`（`PBMOCKX_DATA_DIR` 可覆盖）；代码目录只读。
 
@@ -106,7 +107,8 @@ skill/SKILL.md  唯一面向用户的 agent 指南（`agent-doc` 打印）
 - 所有读命令支持 `--json`；新增 `start/stop/restart/status/logs/ca`。
 - `--data-dir <dir>` 是全局参数：`main()` 在分发前把它转成 `PBMOCKX_DATA_DIR` 并移除，测试/多实例都用它。
 - `doctor` 只做检查（退出码 0）；`fix` = `tsc` → restart → health verify。
-- 进程管理：`start` detached spawn `bin/pbmockxd.js`，日志重定向到数据目录；等待 health；`stop` SIGTERM→SIGKILL；`runtime.json` 是 CLI 找端口的权威来源。
+- 进程管理：`start` detached spawn `bin/pbmockxd.js`，日志重定向到数据目录；等待 health；`stop` SIGTERM→SIGKILL；`runtime.json` 是 CLI 找端口的权威来源。CLI 的 API host 用 `resolveHost()`（runtime 里非通配地址优先），支持 `--host <LAN-IP>` 这种非 loopback 绑定。
+- `--lan` = `host=0.0.0.0` + `ui.lanAccess=true`；普通 `--host 0.0.0.0` 也默认允许 LAN UI（config 可关）。`connect-android --wifi` 用 LAN IP 替代 adb reverse。
 - `connect-android`：`adb reverse tcp:<port> tcp:<port>` + `settings put global http_proxy`；证书状态复用 `android.ts` 的纯函数（system/user/not_found/unknown）。
 
 ## Web UI（web/）
@@ -115,7 +117,7 @@ skill/SKILL.md  唯一面向用户的 agent 指南（`agent-doc` 打印）
 - `app.js`：状态、flow 列表/详情、SSE、抽屉/弹窗、快捷键；`tree.js`：PB/JSON 懒加载树；`panels.js`：规则与 CA/setup 面板；`api.js`：`/__pbmockx/api` fetch 封装。
 - flow 列表有 Flat/Tree 两种视图：Tree 用压缩路径 trie（host → 共享路径前缀 → 请求），默认全部折叠（只显示 host 分组），展开状态存 `pbmockx-tree-open-v2`；选中的请求会给其祖先分组加 `has-selected` 标记。列表宽度可拖拽（`--sidebar-width`，双击复位）。
 - 大响应注意懒加载：树节点只在首次展开时构建 DOM；raw/hex 视图限 64KB/400KB 显示。
-- 安全：`static.ts` 下发 CSP（self + inline style），无外链/CDN；控制 API 的 loopback 检查在 daemon 层。
+- 安全：`static.ts` 下发 CSP（self + inline style），无外链/CDN；管理面访问控制（loopback / `ui.lanAccess` / CA 下载例外）在 daemon 层。
 
 ## 测试
 
@@ -137,6 +139,7 @@ node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 
 - **npm 缓存**：沙箱/权限异常时用 `npm install --cache .npm-cache`（已 gitignore）。
 - **数据目录**：测试/本地开发用 `PBMOCKX_DATA_DIR=$PWD/.dev-data` 或 `--data-dir`，避免写 `~/.pbmockx`。
+- **局域网测试**：`0.0.0.0` 绑定后用本机 LAN IP 访问 UI/API 可模拟非 loopback 来源；`ui.lanAccess=false` 应返回 403（CA 下载端点除外）。
 - 运行时依赖只有 `protobufjs`、`long`、`js-yaml`、`node-forge`；不要重新引入 koa/whistle。
 - Node ≥ 18（`node:test` 可用）；TypeScript 不开 strict，编译到 `dist/`。
 - 无测试框架，使用 `node:test` + `assert`；测试文件编译后由 `node --test dist/tests/` 执行。
@@ -151,7 +154,7 @@ node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 6. **patch 失败回退**：`MockEngine.transformResponse` 返回 `{patched:false, patchError}`，代理必须发原始字节。
 7. **规则保存**：不要在未 reload 的情况下调用 `save()`，否则可能覆盖磁盘规则（已有守卫，勿移除）。
 8. **CA 私钥权限 0600**；`pbmockx ca --regen` 需要 `--yes` 并重启 daemon。
-9. **管理面只允许 loopback**：`daemon.ts` 的 `isLocalRequest` + remoteAddress 检查；改路由时保持。
+9. **管理面访问控制**：默认只允许 loopback；绑定 LAN 且 `ui.lanAccess=true` 时允许非 loopback（CA 下载端点始终允许）。`isLocalRequest` 负责区分本机 UI 与代理流量，remoteAddress 负责鉴权，两者不要混淆。
 10. **单端口自环**：目标是自身端口时返回 421/UI，不能递归代理。
 11. **请求体旁路采样必须在 pipe 同一 tick 开始**：不要在 `await planRequest()` 前 `req.on('data')` —— 那会让流进入 flowing 模式，body 在真正 pipe 到上游前被丢弃（POST 变空）。`startRequestTap()` 就是为此延后调用。
 

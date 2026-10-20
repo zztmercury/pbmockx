@@ -18,6 +18,7 @@
 ### 新增
 - **原生抓包**：HTTP/1.1 正向代理、HTTPS CONNECT 中间人、WebSocket 隧道、gzip/deflate/br、SSE 流式透传、大 body 背压转发；请求体旁路采样不阻塞转发。
 - **原生 Mock**：`patch`（含 `--append/--insert/--remove/--unset`、`google.protobuf.Any` 穿透）、`map_local(data|file)`、`map_remote`（含 regex，bare replacement 仍按 `https://` 处理）；`map_local` 的 `status`/`headers` 覆盖真正生效。
+- **局域网访问**：`pbmockx start --lan`（或 `--host 0.0.0.0`）后，同一 LAN 的设备可用代理并打开 Web UI/控制 API；`ui.lanAccess=false` 可只暴露代理（CA 下载仍可用），CA 下载端点对 LAN 开放。`pbmockx connect-android --wifi` 支持 Wi-Fi 设备直接指向本机 LAN IP。CLI 支持非 loopback 绑定（`resolveHost`）。start/status 会打印可用 LAN 地址。
 - **Web UI**（`http://127.0.0.1:8899/`）：实时 flow 列表（Flat/Tree 两种视图，Tree 按 host + 压缩路径树聚合、默认折叠）、可拖拽列表宽度、长 URL 自动换行、请求/响应详情、交互式 PB 字段树、mock 前/后切换、规则 CRUD 与启停、mock 数据编辑、CA 下载与各平台接入指引、SSE 实时更新、深浅色主题。
 - **新 CLI 命令**：`start`、`stop`、`restart`、`status`、`logs`、`ca`；`flows/decode/rules/map-local/map-remote/doctor/status` 支持 `--json`。
 - **原生生命周期**：detached 守护进程、`runtime.json` + pid、日志文件、端口占用诊断、优雅退出、`pbmockx fix`（构建 + 重启 + 验证）。
@@ -30,7 +31,7 @@
 - `pbmockx agent-doc` / `skill install|list|uninstall` / `version [--check]` / `connect-android`。
 
 ### 验证
-- 69 条自动化测试（node:test）：核心 PB/规则/字段树、CA/TLS、HTTP/HTTPS 抓包、gzip patch、map_local/map_remote、SSE、WebSocket、2MB 透传、HEAD/204、CLI 契约。
+- 70 条自动化测试（node:test）：核心 PB/规则/字段树、CA/TLS、HTTP/HTTPS 抓包、gzip patch、map_local/map_remote、SSE、WebSocket、2MB 透传、HEAD/204、CLI 契约。
 - 手动：`curl --proxy` HTTP/HTTPS、Web UI、Android `adb reverse`（可选真机）。
 
 ## [0.6.9] - 2026-09-23

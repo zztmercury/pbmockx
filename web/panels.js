@@ -346,14 +346,24 @@ export async function renderSetupPanel(container, ctx) {
   const pb = el('div', 'card-body');
   pb.appendChild(el('div', 'note', 'Point your device/browser HTTP proxy at this address. HTTPS is captured via a local CA.'));
   const row = el('div', 'copy-row');
-  const addr = el('code', '', (info.host === '0.0.0.0' ? '<this-machine-ip>' : info.host || '127.0.0.1') + ':' + (info.port || ''));
+  const lanHost = info.lanAddresses && info.lanAddresses[0];
+  const shownHost = (info.host === '0.0.0.0' || info.host === '::')
+    ? (lanHost || '<this-machine-ip>')
+    : (info.host || '127.0.0.1');
+  const addr = el('code', '', shownHost + ':' + (info.port || ''));
   row.appendChild(addr);
   const copyBtn = el('button', 'btn small', 'Copy');
   copyBtn.addEventListener('click', () => ctx.copy(addr.textContent));
   row.appendChild(copyBtn);
   pb.appendChild(row);
-  if (info.host === '0.0.0.0') {
-    pb.appendChild(el('div', 'note', 'Bound to 0.0.0.0 — devices on the same LAN can reach it. The UI/API stay loopback-only.'));
+  if (info.host === '0.0.0.0' || info.host === '::') {
+    pb.appendChild(el('div', 'note', 'Bound to 0.0.0.0 — devices on the same LAN can use this proxy and open the UI. Only do this on trusted networks.'));
+    if (info.lanAddresses && info.lanAddresses.length > 1) {
+      pb.appendChild(el('div', 'note', 'Other addresses: ' + info.lanAddresses.slice(1).join(', ')));
+    }
+    if (info.ui && info.ui.lanAccess === false) {
+      pb.appendChild(el('div', 'banner warn', 'LAN UI access is disabled (ui.lanAccess=false); the proxy is reachable but the UI/API are loopback-only.'));
+    }
   }
   proxy.appendChild(pb);
   container.appendChild(proxy);

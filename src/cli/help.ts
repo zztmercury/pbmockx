@@ -23,14 +23,14 @@ Mock rules:
   map-remote list | del <id>
 
 Daemon:
-  start [--port <n>] [--host <h>] [--foreground]
+  start [--port <n>] [--host <h>] [--lan] [--foreground]
   stop | restart | status [--json]
   logs [-f] [-n <lines>]
   web                                      Open the Web UI
   ca [--out <file>] [--info] [--regen --yes]
 
 Device:
-  connect-android [-s <serial>]            Configure Android proxy + cert status
+  connect-android [-s <serial>] [--wifi [host]]  Configure Android proxy + cert status
 
 Maintenance:
   doctor [--json]                          Health check (daemon, CA, rules)
@@ -139,19 +139,23 @@ Options:
 }
 
 export function helpStart(): void {
-  console.log(`Usage: pbmockx start [--port <n>] [--host <h>] [--foreground]
+  console.log(`Usage: pbmockx start [--port <n>] [--host <h>] [--lan] [--foreground]
 
 Start the pbmockx daemon (proxy + control API + Web UI on one port).
 
 Options:
   --port <n>     Listen port (default: config or 8899)
   --host <h>     Bind host (default: 127.0.0.1; use 0.0.0.0 for LAN devices)
+  --lan          Shorthand for --host 0.0.0.0 and UI/API LAN access
   --foreground   Run in the foreground (Ctrl+C to stop)
-  -h, --help     Show this help`);
+  -h, --help     Show this help
+
+LAN access is enabled by default when bound to 0.0.0.0; set
+"ui": { "lanAccess": false } in config.json to expose only the proxy.`);
 }
 
 export function helpRestart(): void {
-  console.log(`Usage: pbmockx restart [--port <n>] [--host <h>]\n\nRestart the daemon (uses the current runtime port unless overridden).`);
+  console.log(`Usage: pbmockx restart [--port <n>] [--host <h>] [--lan]\n\nRestart the daemon (uses the current runtime port/host unless overridden).`);
 }
 
 export function helpStop(): void {
@@ -183,10 +187,11 @@ export function helpWeb(): void {
 }
 
 export function helpConnectAndroid(): void {
-  console.log(`Usage: pbmockx connect-android [-s <serial>]
+  console.log(`Usage: pbmockx connect-android [-s <serial>] [--wifi [host]]
 
 Configure an Android device to use pbmockx as its HTTP proxy (adb reverse +
-global http_proxy) and detect the CA install status.
+global http_proxy by default; --wifi uses the LAN address instead) and detect
+the CA install status.
 
 Status values: system | user | not_found | unknown.
 The user-cert directory is SELinux-protected, so on non-root devices the CA
@@ -195,7 +200,10 @@ System certificates require root / Magisk; this command never modifies certs.
 
 Options:
   -s <serial>   Target a specific adb device
-  -h, --help    Show this help`);
+  --wifi [host] Use a LAN proxy instead of adb reverse (default: first LAN IP)
+  -h, --help    Show this help
+
+Run pbmockx with --lan (or --host 0.0.0.0) first so LAN devices can connect.`);
 }
 
 export function helpDoctor(): void {

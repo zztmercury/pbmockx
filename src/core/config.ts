@@ -27,7 +27,11 @@ export interface PbmockxConfig {
     maxTotalRecordBytes: number;
     maxRewriteBodyBytes: number;
   };
-  ui: Record<string, unknown>;
+  ui: {
+    /** Allow the control API + Web UI from non-loopback clients (LAN). */
+    lanAccess: boolean;
+    [key: string]: unknown;
+  };
 }
 
 export const DEFAULT_CONFIG: PbmockxConfig = {
@@ -45,7 +49,12 @@ export const DEFAULT_CONFIG: PbmockxConfig = {
     maxTotalRecordBytes: 256 * 1024 * 1024,
     maxRewriteBodyBytes: 64 * 1024 * 1024,
   },
-  ui: {},
+  ui: {
+    // Binding 127.0.0.1 already limits reachability; when the daemon is
+    // explicitly bound to 0.0.0.0 we allow the UI from the LAN too (set
+    // ui.lanAccess=false to expose the proxy only).
+    lanAccess: true,
+  },
 };
 
 /** Package root (contains package.json + VERSION). Works from dist/src/... or src/. */
@@ -150,6 +159,8 @@ export function loadConfig(overrides: Partial<PbmockxConfig> = {}, p: PbmockxPat
   const hostEnv = process.env.PBMOCKX_HOST;
   if (portEnv) cfg.port = parseInt(portEnv, 10) || cfg.port;
   if (hostEnv) cfg.host = hostEnv;
+  if (process.env.PBMOCKX_LAN === '0') cfg.ui.lanAccess = false;
+  if (process.env.PBMOCKX_LAN === '1') cfg.ui.lanAccess = true;
   cfg = merge(cfg, overrides);
   cfg.port = Number(cfg.port) || DEFAULT_CONFIG.port;
   if (!Array.isArray(cfg.proxy.bypass)) cfg.proxy.bypass = [];
@@ -194,6 +205,13 @@ export function clearRuntime(p: PbmockxPaths = paths()): void {
   try { fs.unlinkSync(p.runtimeFile); } catch {}
 }
 
+/** Host used by the CLI to reach the daemon (runtime host unless wildcard). */
+export function resolveHost(p: PbmockxPaths = paths()): string {
+  const rt = readRuntime(p);
+  if (rt && rt.host && rt.host !== '0.0.0.0' && rt.host !== '::') return rt.host;
+  return '127.0.0.1';
+}
+
 /** Port used by the CLI to reach the daemon. */
 export function resolvePort(p: PbmockxPaths = paths()): number {
   if (process.env.PBMOCKX_PORT) {
@@ -213,6 +231,38 @@ export function resolvePort(p: PbmockxPaths = paths()): number {
 
 export function readVersion(p: PbmockxPaths = paths()): string {
   try { return fs.readFileSync(p.versionFile, 'utf-8').trim(); } catch { return 'unknown'; }
+}
+
+/** Non-internal IPv4 addresses, private ranges first (best LAN candidates). */
+export function localAddresses(): string[] {
+  const out: string[] = [];
+  const ifaces = os.networkInterfaces();
+  for (const list of Object.values(ifaces)) {
+    for (const a of list || []) {
+      const family: any = (a as any).family;
+      if ((family === 'IPv4' || family === 4) && !a.internal) out.push(a.address);
+    }
+  }
+  const score = (ip: string): number => {
+    if (ip.startsWith('192.168.')) return 0;
+    if (ip.startsWith('10.')) return 1;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 2;
+    return 3;
+  };
+  return [...new Set(out)].sort((a, b) => score(a) - score(b) || a.localeCompare(b));
+}
+
+/**
+ * Whether a Host header / URL hostname refers to this machine. Used to decide
+ * between the local UI/API and proxy traffic on the shared port.
+ */
+export function isLocalHostname(host: string, addresses: string[] = localAddresses()): boolean {
+  const h = (host || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (!h) return false;
+  if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '0.0.0.0' || h.startsWith('127.')) return true;
+  if (addresses.includes(h)) return true;
+  const hostname = os.hostname().toLowerCase();
+  return h === hostname || h === hostname + '.local';
 }
 
 export function isLoopbackAddress(addr: string | undefined): boolean {

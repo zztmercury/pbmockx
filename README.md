@@ -57,6 +57,23 @@ pbmockx ca --out ./pbmockx-ca.crt   # 导出 CA 证书
 3. **打开 Web UI**：`pbmockx web` 或访问 <http://127.0.0.1:8899/>。
 4. 触发一次请求，UI 左侧出现 flow；点开即可看请求/响应与 PB 字段树。
 
+### 局域网设备（手机 / 另一台电脑）
+
+默认只监听 `127.0.0.1`。要让同一 Wi-Fi/LAN 的设备访问：
+
+```bash
+pbmockx start --lan            # 等价于 --host 0.0.0.0 + 允许 LAN 访问 UI/API
+# 或
+pbmockx start --host 0.0.0.0
+```
+
+启动日志会打印可用的 LAN 地址（例如 `http://192.168.1.23:8899/`）。
+手机/另一台电脑把 HTTP/HTTPS 代理设为 `<LAN-IP>:8899`，UI 直接打开 `http://<LAN-IP>:8899/`。
+
+- Android 走 Wi-Fi（非 USB）时用 `pbmockx connect-android --wifi`，会自动取本机 LAN IP。
+- 只想让 LAN 设备用代理、不想暴露 UI/API：在 `~/.pbmockx/config.json` 里设 `"ui": { "lanAccess": false }`。
+- **只建议在可信局域网开启**：开启后同网段设备能查看捕获的请求/响应。macOS 防火墙若拦截入站连接，请在“系统设置 → 网络 → 防火墙”中允许 `node`。
+
 ```bash
 # 用 curl 验证整条链路
 curl -x http://127.0.0.1:8899 http://example.com/
@@ -91,7 +108,7 @@ pbmockx map-remote add 'api/(.*)' 'https://mock.local/$1' --regex
 pbmockx map-remote list | del <id>
 
 # 守护进程
-pbmockx start [--port 8899] [--host 127.0.0.1] [--foreground]
+pbmockx start [--port 8899] [--host 127.0.0.1] [--lan] [--foreground]
 pbmockx stop | restart | status [--json] | logs [-f] [-n 100]
 pbmockx ca [--out <file>] [--info] [--regen --yes]
 
@@ -101,7 +118,7 @@ pbmockx fix                   # 构建 + 重启 + 验证
 pbmockx agent-doc             # 打印 SKILL.md
 pbmockx skill install|list|uninstall
 pbmockx version [--check]
-pbmockx connect-android [-s <serial>]
+pbmockx connect-android [-s <serial>] [--wifi [host]]
 ```
 
 - 所有命令支持 `-h/--help`；读命令支持 `--json`。
@@ -134,7 +151,7 @@ pbmockx connect-android [-s <serial>]
 └─ logs/pbmockxd.log
 ```
 
-常用环境变量：`PBMOCKX_PORT`、`PBMOCKX_HOST`、`PBMOCKX_DATA_DIR`、`PBMOCKX_LOG_LEVEL`。旧变量 `WHISTLE_PORT` 仍作为最低优先级回退。
+常用环境变量：`PBMOCKX_PORT`、`PBMOCKX_HOST`、`PBMOCKX_DATA_DIR`、`PBMOCKX_LAN`、`PBMOCKX_LOG_LEVEL`。旧变量 `WHISTLE_PORT` 仍作为最低优先级回退。
 
 配置示例（`~/.pbmockx/config.json`）：
 
@@ -142,6 +159,7 @@ pbmockx connect-android [-s <serial>]
 {
   "port": 8899,
   "host": "127.0.0.1",
+  "ui": { "lanAccess": true },
   "proxy": {
     "mitm": true,
     "mitmPorts": [443, 8443],
@@ -158,7 +176,7 @@ pbmockx connect-android [-s <serial>]
 ```
 
 - `map_remote` 指向 loopback/私网地址时自动跳过上游证书校验（兼容本地 HTTPS mock server）；其他目标默认校验证书。
-- 管理 API 与 UI 只接受 loopback 来源；代理本身可用 `--host 0.0.0.0` 供局域网设备使用。
+- 默认只监听 loopback。绑定 `--host 0.0.0.0` / `--lan` 后，代理、UI、控制 API 都可从 LAN 访问；`ui.lanAccess=false` 可只暴露代理（CA 下载端点仍允许，方便设备装证书）。
 
 ## 限制
 

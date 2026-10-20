@@ -13,9 +13,11 @@ import { execSync } from 'child_process';
 import * as https from 'https';
 
 import {
+  localAddresses,
   packageRoot,
   paths,
   readVersion,
+  resolveHost,
   resolvePort,
 } from '../core/config';
 import { client, health, ApiClient } from './api';
@@ -294,7 +296,7 @@ async function cmdMapRemote(args: string[]): Promise<void> {
 async function cmdWeb(args: string[]): Promise<void> {
   if (hasHelp(args)) { help.helpWeb(); return; }
   const port = resolvePort();
-  const url = 'http://127.0.0.1:' + port + '/';
+  const url = 'http://' + resolveHost() + ':' + port + '/';
   console.log('Opening', url);
   openUrl(url);
 }
@@ -303,6 +305,16 @@ async function cmdConnectAndroid(args: string[]): Promise<void> {
   if (hasHelp(args)) { help.helpConnectAndroid(); return; }
   const serial = flagValue(args, '-s') || null;
   const port = resolvePort();
+  const wifiIdx = args.indexOf('--wifi');
+  let wifiHost: string | null = null;
+  if (wifiIdx >= 0) {
+    const next = args[wifiIdx + 1];
+    wifiHost = next && !next.startsWith('-') ? next : (localAddresses()[0] || null);
+    if (!wifiHost) {
+      console.error('Error: no non-internal IPv4 address found for --wifi; pass an explicit host.');
+      process.exit(1);
+    }
+  }
 
   if (!serial) {
     const devices = listDevices();
@@ -335,8 +347,13 @@ async function cmdConnectAndroid(args: string[]): Promise<void> {
   };
 
   console.log('=== Step 1: Configure proxy (executed) ===');
-  adbExec('reverse tcp:' + port + ' tcp:' + port);
-  adbExec('shell settings put global http_proxy 127.0.0.1:' + port);
+  if (wifiHost) {
+    console.log('Wi-Fi mode: using ' + wifiHost + ':' + port + ' (no adb reverse)');
+    adbExec('shell settings put global http_proxy ' + wifiHost + ':' + port);
+  } else {
+    adbExec('reverse tcp:' + port + ' tcp:' + port);
+    adbExec('shell settings put global http_proxy 127.0.0.1:' + port);
+  }
 
   console.log('\n=== Step 2: Detect status (read-only) ===');
   const proxy = detectProxy(serial, port);
@@ -373,7 +390,7 @@ async function cmdConnectAndroid(args: string[]): Promise<void> {
     console.log('  networkSecurityConfig in the app.');
   } else if (certState === 'not_found') {
     console.log('\n  Manual steps to install (NOT executed by this command):');
-    console.log('  1. Download: http://127.0.0.1:' + port + '/__pbmockx/api/ca.pem');
+    console.log('  1. Download: http://' + (wifiHost || '127.0.0.1') + ':' + port + '/__pbmockx/api/ca.pem');
     console.log('  2. adb push ' + p.caCertFile + ' /sdcard/pbmockx-ca.crt');
     console.log('  3. Settings > Security > Encryption & credentials > Install from storage');
     console.log('  Re-run: pbmockx connect-android' + (serial ? ' -s ' + serial : '') + '  (after install)');
@@ -420,7 +437,7 @@ async function cmdDoctor(args: string[]): Promise<void> {
 
   let info: any = null;
   try {
-    info = await health(port);
+    info = await health(port, resolveHost(p));
     add('daemon', 'OK', `http://127.0.0.1:${port} | flows: ${info.flow_count} | rules: ${info.rules}`);
     if (info.flow_count === 0) add('traffic', 'WARN', 'no flows captured yet — configure the proxy and trigger a request');
   } catch (e: any) {
@@ -495,7 +512,7 @@ async function cmdFix(args: string[]): Promise<void> {
   }
 
   console.log('[3/3] Verifying...');
-  const ok = await waitForHealth(resolvePort(p), 10000);
+  const ok = await waitForHealth(resolvePort(p), 10000, resolveHost(p));
   if (!ok) {
     console.error('  daemon is not healthy. Last log lines:');
     try { console.error(fs.readFileSync(p.logFile, 'utf-8').split('\n').slice(-20).join('\n')); } catch {}
@@ -643,6 +660,7 @@ export async function main(argv: string[]): Promise<void> {
         port: flagValue(args, '--port') ? parseInt(flagValue(args, '--port')!, 10) : undefined,
         host: flagValue(args, '--host'),
         foreground: args.includes('--foreground'),
+        lan: args.includes('--lan'),
       });
       return;
     }
@@ -656,6 +674,7 @@ export async function main(argv: string[]): Promise<void> {
       await cmdRestart({
         port: flagValue(args, '--port') ? parseInt(flagValue(args, '--port')!, 10) : undefined,
         host: flagValue(args, '--host'),
+        lan: args.includes('--lan'),
       });
       return;
     }

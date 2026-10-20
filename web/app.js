@@ -816,7 +816,10 @@ async function fetchHealth() {
 async function initialLoad() {
   try {
     state.info = await api('/info');
-    els.proxyAddr.textContent = (state.info.host === '0.0.0.0' ? '<this-machine-ip>' : state.info.host) + ':' + state.info.port;
+    const host = state.info.host === '0.0.0.0' || state.info.host === '::'
+      ? (state.info.lanAddresses && state.info.lanAddresses[0]) || '<this-machine-ip>'
+      : state.info.host;
+    els.proxyAddr.textContent = host + ':' + state.info.port;
   } catch {}
   try {
     const flows = await api('/flows');

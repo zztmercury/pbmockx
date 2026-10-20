@@ -3,7 +3,7 @@
  */
 
 import * as http from 'http';
-import { resolvePort } from '../core/config';
+import { resolveHost, resolvePort } from '../core/config';
 
 export class ApiClient {
   constructor(public port: number, public host = '127.0.0.1') {}
@@ -53,8 +53,8 @@ export class ApiClient {
   del(p: string): Promise<any> { return this.request('DELETE', p); }
 }
 
-export function client(port: number = resolvePort()): ApiClient {
-  return new ApiClient(port);
+export function client(port: number = resolvePort(), host: string = resolveHost()): ApiClient {
+  return new ApiClient(port, host);
 }
 
 export async function health(port: number, host = '127.0.0.1'): Promise<any> {

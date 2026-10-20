@@ -9,9 +9,11 @@ import { execSync, spawn } from 'child_process';
 import {
   dataDir,
   loadConfig,
+  localAddresses,
   packageRoot,
   paths,
   readRuntime,
+  resolveHost,
   resolvePort,
   readVersion,
   type PbmockxPaths,
@@ -25,22 +27,32 @@ export interface StartOptions {
   host?: string;
   dataDir?: string;
   foreground?: boolean;
+  /** Bind 0.0.0.0 and allow UI/API access from the LAN. */
+  lan?: boolean;
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export async function waitForHealth(port: number, timeoutMs = 15000): Promise<any | null> {
+export async function waitForHealth(port: number, timeoutMs = 15000, host = '127.0.0.1'): Promise<any | null> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
-      return await health(port);
+      return await health(port, host);
     } catch {
       await sleep(250);
     }
   }
   return null;
+}
+
+function wildcardHost(host: string): boolean {
+  return host === '0.0.0.0' || host === '::' || host === '';
+}
+
+function probeHostFor(host: string): string {
+  return wildcardHost(host) ? '127.0.0.1' : host;
 }
 
 function statePaths(dir?: string): PbmockxPaths {
@@ -51,24 +63,39 @@ export async function cmdStart(opts: StartOptions = {}): Promise<void> {
   const p = statePaths(opts.dataDir);
   const cfg = loadConfig({}, p);
   const port = opts.port || cfg.port;
-  const host = opts.host || cfg.host;
+  const host = opts.host || (opts.lan ? '0.0.0.0' : cfg.host);
 
-  const existing = await waitForHealth(port, 600);
-  if (existing) {
-    console.log(`pbmockx is already running at http://127.0.0.1:${port} (pid ${readRuntime(p)?.pid || '?'})`);
-    return;
+  // If an instance is already running, report its real host/port instead of
+  // starting a second one on a possibly different interface.
+  const existingRuntime = readRuntime(p);
+  if (existingRuntime) {
+    const existing = await waitForHealth(existingRuntime.port, 600, probeHostFor(existingRuntime.host));
+    if (existing) {
+      console.log(`pbmockx is already running at http://${probeHostFor(existingRuntime.host)}:${existingRuntime.port} (pid ${existingRuntime.pid || '?'})`);
+      const ips = localAddresses();
+      if (wildcardHost(existingRuntime.host) && ips.length) {
+        console.log(`  LAN: http://${ips[0]}:${existingRuntime.port}/`);
+      }
+      return;
+    }
   }
 
   if (opts.foreground) {
     const { startDaemon } = require('../server/daemon');
-    const handle = await startDaemon({ dataDir: p.dataDir, port, host });
+    const handle = await startDaemon({
+      dataDir: p.dataDir,
+      port,
+      host,
+      config: opts.lan ? { ui: { lanAccess: true } } : undefined,
+    });
     const shutdown = async () => {
       await handle.close();
       process.exit(0);
     };
     process.on('SIGINT', () => void shutdown());
     process.on('SIGTERM', () => void shutdown());
-    console.log(`pbmockx daemon running at http://${host}:${handle.port} (Ctrl+C to stop)`);
+    const shown = probeHostFor(host);
+    console.log(`pbmockx daemon running at http://${shown}:${handle.port} (Ctrl+C to stop)`);
     return;
   }
 
@@ -83,21 +110,32 @@ export async function cmdStart(opts: StartOptions = {}): Promise<void> {
       PBMOCKX_DATA_DIR: p.dataDir,
       PBMOCKX_PORT: String(port),
       PBMOCKX_HOST: host,
+      ...(opts.lan ? { PBMOCKX_LAN: '1' } : {}),
     },
   });
   child.unref();
   fs.closeSync(logFd);
 
-  const ready = await waitForHealth(port, 20000);
+  const ready = await waitForHealth(port, 20000, probeHostFor(host));
   if (!ready) {
     console.error('pbmockx failed to start. Last log lines:');
     console.error(tailFile(p.logFile, 30));
     process.exitCode = 1;
     return;
   }
+  const shownHost = probeHostFor(host);
   console.log(`pbmockx started (pid ${readRuntime(p)?.pid || child.pid})`);
-  console.log(`  proxy : http://${host}:${port}`);
-  console.log(`  UI    : http://127.0.0.1:${port}/`);
+  console.log(`  proxy : ${host}:${port}`);
+  console.log(`  UI    : http://${shownHost}:${port}/`);
+  const ips = localAddresses();
+  if ((host === '0.0.0.0' || host === '::') && ips.length) {
+    for (const ip of ips.slice(0, 3)) console.log(`  LAN   : http://${ip}:${port}/  (proxy ${ip}:${port})`);
+    console.log('');
+    console.log('LAN note: devices on this network can open the UI and read captured traffic.');
+    console.log('          Set ui.lanAccess=false in config.json to expose only the proxy.');
+  } else if (host === '0.0.0.0' || host === '::') {
+    console.log('  LAN   : no non-internal IPv4 address detected');
+  }
   console.log(`  data  : ${p.dataDir}`);
   console.log(`  CA    : ${p.caCertFile}`);
   console.log('');
@@ -131,7 +169,11 @@ export async function cmdRestart(opts: StartOptions = {}): Promise<void> {
   const rt = readRuntime(p);
   if (rt) {
     await cmdStop({ dataDir: p.dataDir });
-    await cmdStart({ ...opts, port: opts.port || rt.port, host: opts.host || rt.host });
+    await cmdStart({
+      ...opts,
+      port: opts.port || rt.port,
+      host: opts.host || (opts.lan ? '0.0.0.0' : rt.host),
+    });
   } else {
     await cmdStart(opts);
   }
@@ -141,18 +183,22 @@ export async function cmdStatus(opts: { dataDir?: string; json?: boolean } = {})
   const p = statePaths(opts.dataDir);
   const port = resolvePort(p);
   let info: any = null;
-  try { info = await health(port); } catch {}
+  try { info = await health(port, resolveHost(p)); } catch {}
   const rt = readRuntime(p);
+  const ips = localAddresses();
+  const lanHost = rt && (rt.host === '0.0.0.0' || rt.host === '::') ? ips[0] : undefined;
   if (opts.json) {
-    console.log(JSON.stringify({ running: !!info, port, runtime: rt, health: info }, null, 2));
+    console.log(JSON.stringify({ running: !!info, port, runtime: rt, health: info, lanAddresses: ips }, null, 2));
     return;
   }
   console.log('pbmockx', readVersion(p));
   if (info) {
     const uptime = Math.round((info.uptime || 0) / 1000);
-    console.log(`Daemon: running (pid ${rt?.pid || '?'}) http://127.0.0.1:${port}`);
+    const shownHost = rt && !wildcardHost(rt.host) ? rt.host : '127.0.0.1';
+    console.log(`Daemon: running (pid ${rt?.pid || '?'}) http://${shownHost}:${port}`);
     console.log(`Uptime: ${formatUptime(uptime)} | flows: ${info.flow_count} | rules: ${info.rules}`);
-    console.log(`UI:     http://127.0.0.1:${port}/`);
+    console.log(`UI:     http://${shownHost}:${port}/`);
+    if (lanHost) console.log(`LAN:    http://${lanHost}:${port}/  (proxy ${lanHost}:${port})`);
   } else {
     console.log('Daemon: not running');
     console.log(`Start:  pbmockx start${p.dataDir !== dataDir() ? ` --data-dir ${p.dataDir}` : ''}`);
@@ -206,7 +252,7 @@ export async function cmdCa(opts: {
   const p = statePaths(opts.dataDir);
   const port = resolvePort(p);
   let running = false;
-  try { await health(port); running = true; } catch {}
+  try { await health(port, resolveHost(p)); running = true; } catch {}
 
   const ca = new CertAuthority(p.caDir);
 

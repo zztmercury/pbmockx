@@ -182,17 +182,18 @@ map_remote(请求阶段) → map_local(file)(请求阶段) → map_local(data)(�
 ### 进程与连接
 
 ```bash
-pbmockx start [--port 8899] [--host 127.0.0.1] [--foreground]
+pbmockx start [--port 8899] [--host 127.0.0.1] [--lan] [--foreground]
 pbmockx stop | restart | status [--json]
 pbmockx logs [-f] [-n 100]
 pbmockx web                                   # 打开 Web UI
 pbmockx ca [--out <file>] [--info] [--regen --yes]
-pbmockx connect-android [-s <serial>]
+pbmockx connect-android [-s <serial>] [--wifi [host]]
 ```
 
-- 默认监听 `127.0.0.1:8899`；需要局域网设备访问时 `--host 0.0.0.0`（管理 API/UI 仍只限 loopback）。
+- 默认监听 `127.0.0.1:8899`。局域网设备（手机/另一台电脑）要用时：`pbmockx start --lan`（或 `--host 0.0.0.0`）。启动输出会打印 LAN IP；代理和 UI 都用 `http://<LAN-IP>:8899`。
+- 只想暴露代理、不暴露 UI/API：`~/.pbmockx/config.json` 设 `{"ui":{"lanAccess":false}}`（CA 下载端点仍可用）。
 - 端口占用时用 `PBMOCKX_PORT=8900 pbmockx start`；CLI 后续命令会自动从 `runtime.json` 找到端口。
-- Android：`connect-android` 会执行 `adb reverse tcp:8899 tcp:8899` + `settings put global http_proxy 127.0.0.1:8899`，并检测 CA 状态（system/user/not_found/unknown；非 root 设备用户证书目录受 SELinux 保护，通常 unknown，需要手动核对）。
+- Android USB：`connect-android` 执行 `adb reverse tcp:8899 tcp:8899` + `settings put global http_proxy 127.0.0.1:8899`。Android Wi-Fi：先 `pbmockx start --lan`，再 `pbmockx connect-android --wifi`（自动取本机 LAN IP）。证书状态检测：system/user/not_found/unknown；非 root 设备用户证书目录受 SELinux 保护，通常 unknown，需要手动核对。
 
 ### 抓包与查看
 
@@ -239,6 +240,7 @@ pbmockx version [--check]
 | 请求一直卡住 | 见 `pbmockx logs -n 100`；确认上游可达；h2-only/gRPC 接口不支持（用 bypass 原始隧道）。 |
 | 规则未持久化 | `rules add/del` 自动保存；手动改文件后 `pbmockx rules reload`；`pbmockx rules list` 核对。 |
 | daemon 起不来 | `pbmockx fix`；仍失败看 `pbmockx logs -n 50`；端口冲突换 `PBMOCKX_PORT`。 |
+| 局域网设备连不上 | 确认 daemon 以 `--lan` / `--host 0.0.0.0` 启动（`pbmockx status` 会显示 LAN 地址）；设备代理填 LAN IP:8899 而不是 127.0.0.1；HTTPS 需装 CA；macOS 防火墙需允许 node 入站。UI 打不开时检查 `ui.lanAccess` 是否为 false。 |
 
 ## 7. 备注与限制
 

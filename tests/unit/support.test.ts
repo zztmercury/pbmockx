@@ -23,7 +23,7 @@ import { FlowStore } from '../../src/core/flow-store';
 import { RuleEngine, MockRule } from '../../src/core/rules';
 import { MockEngine } from '../../src/mock/engine';
 import { CertAuthority } from '../../src/proxy/ca';
-import { loadConfig, paths, resolvePort, writeRuntime } from '../../src/core/config';
+import { isLocalHostname, localAddresses, loadConfig, paths, resolvePort, writeRuntime } from '../../src/core/config';
 
 function tmpDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -199,6 +199,18 @@ test('MockEngine map_local(file) returns file bytes and content type', async () 
   assert.strictEqual(plan.localResponse!.headers['content-type'], 'application/json');
   assert.strictEqual(plan.localResponse!.body.toString(), '{"file":true}');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('isLocalHostname recognizes loopback, interface IPs and the host name', () => {
+  assert.ok(isLocalHostname('127.0.0.1', []));
+  assert.ok(isLocalHostname('localhost', []));
+  assert.ok(isLocalHostname('::1', []));
+  assert.ok(isLocalHostname('192.168.1.50', ['192.168.1.50']));
+  assert.ok(!isLocalHostname('example.com', ['192.168.1.50']));
+  assert.ok(!isLocalHostname('192.168.1.51', ['192.168.1.50']));
+  const addrs = localAddresses();
+  assert.ok(Array.isArray(addrs));
+  for (const ip of addrs) assert.ok(/^\d{1,3}(\.\d{1,3}){3}$/.test(ip));
 });
 
 test('config precedence and runtime port resolution', () => {

@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { PbmockxConfig, PbmockxPaths } from '../core/config';
-import { readVersion } from '../core/config';
+import { localAddresses, readVersion } from '../core/config';
 import type { CertAuthority } from '../proxy/ca';
 import type { FlowStore, FlowRecord } from '../core/flow-store';
 import type { PBEngine } from '../core/pb-engine';
@@ -186,6 +186,8 @@ function publicInfo(deps: ApiDeps): any {
     dataDir: deps.paths.dataDir,
     rulesFile: deps.paths.rulesFile,
     mockDataDir: deps.paths.mockDataDir,
+    lanAddresses: localAddresses(),
+    ui: { lanAccess: deps.config.ui.lanAccess },
     ca,
     startedAt: deps.startedAt,
     uptimeMs: Date.now() - deps.startedAt,
