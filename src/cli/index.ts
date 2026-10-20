@@ -429,7 +429,7 @@ async function cmdDoctor(args: string[]): Promise<void> {
   }
 
   try {
-    const w2 = execSync('w2 --version', { stdio: 'pipe' }).toString().trim();
+    const w2 = execSync('w2 --version', { stdio: 'pipe', timeout: 3000 }).toString().trim();
     add('legacy whistle', 'WARN', `${w2} installed — pbmockx no longer uses it; stop it if it occupies port ${port}`);
   } catch {
     add('legacy whistle', 'OK', 'not installed');
@@ -578,14 +578,16 @@ async function cmdVersion(args: string[]): Promise<void> {
   if (!args.includes('--check')) return;
   try {
     const data: any = await new Promise((resolve, reject) => {
-      https.get('https://api.github.com/repos/zztmercury/pbmockx/releases/latest',
+      const req = https.get('https://api.github.com/repos/zztmercury/pbmockx/releases/latest',
         { headers: { 'User-Agent': 'pbmockx' } }, (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (c: Buffer) => chunks.push(c));
           res.on('end', () => {
             try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch { resolve(null); }
           });
-        }).on('error', reject);
+        });
+      req.on('error', reject);
+      req.setTimeout(5000, () => req.destroy(new Error('timeout')));
     });
     if (data && data.tag_name) {
       const latest = String(data.tag_name).replace(/^v/, '');

@@ -96,7 +96,9 @@ function renderField(f, depth, initialExpanded) {
         for (const c of children) box.appendChild(renderField(c, depth + 1, false));
       }
     };
-    setOpen(initialExpanded);
+    // Auto-expand at the top level, but not enormous lists: keep first paint
+    // cheap and let the user expand a 10k-item array explicitly.
+    setOpen(initialExpanded && children.length <= 100);
     row.addEventListener('click', (e) => {
       e.stopPropagation();
       setOpen(!node.classList.contains('expanded'));
@@ -174,7 +176,8 @@ function renderJsonNode(key, value, depth, initialExpanded) {
         for (const [k, v] of entries) box.appendChild(renderJsonNode(k, v, depth + 1, depth < 1));
       }
     };
-    setOpen(initialExpanded);
+    const entryCount = Array.isArray(value) ? value.length : Object.keys(value).length;
+    setOpen(initialExpanded && entryCount <= 100);
     row.addEventListener('click', (e) => {
       e.stopPropagation();
       setOpen(!node.classList.contains('jexpanded'));
