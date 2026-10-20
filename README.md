@@ -31,17 +31,28 @@ pbmockx 在本机启动一个 HTTP/HTTPS 代理，自动识别 Charles 风格的
 
 环境：Node.js ≥ 18（macOS / Linux 已验证；Windows 未实测）。
 
+> **当前重构分支尚未合入 `main`。** `main` 上的一键安装仍然安装旧的 whistle 插件；
+> 试用重构版请在 worktree 里跑本地脚本。合并后再使用下面的 remote 一行。
+
 ```bash
-# 远程一行
+# 本地重构分支（当前 worktree）
+cd .worktrees/refactor-native
+./scripts/install.sh
+
+# 合并到 main 后的远程一行
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh)"
 
-# 或本地仓库
-./scripts/install.sh
+# 安装指定分支（分支已 push 到 GitHub 后）
+PBMOCKX_REF=refactor/native-v1 \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/refactor/native-v1/scripts/install.sh)"
 ```
 
-安装脚本会：检查 Node → `npm install` + `tsc` → `npm link`（提供全局 `pbmockx` 命令）→ 安装 agent skill → `pbmockx start`。
+安装脚本会：检查 Node → `npm install` + `tsc` → `npm link`（提供全局 `pbmockx` 命令，替换旧的 whistle 全局链接）→ 安装 agent skill → `pbmockx restart` 启动并验证。
 
-**从旧版（whistle 插件）升级**：先 `w2 stop` 释放 8899，再执行安装脚本。首次在默认数据目录启动时会自动导入旧的 `whistle-plugin/rules.yaml` 和 `mock-data/`。新 CA 需要重新在各设备上信任。
+- 代码安装到 `~/.pbmockx/app`，数据（规则、mock、CA、日志）在 `~/.pbmockx`；可用 `PBMOCKX_INSTALL_DIR` / `PBMOCKX_DATA_DIR` 覆盖。
+- 如果终端里的 `pbmockx` 仍指向旧 whistle 插件，执行 `hash -r`，并用 `which -a pbmockx` 确认。
+- **从旧版（whistle 插件）升级**：先 `w2 stop` 释放 8899，再执行安装脚本；首次在默认数据目录启动时会自动导入旧的 `whistle-plugin/rules.yaml` 和 `mock-data/`。新 CA 需要重新在各设备上信任。
+- 卸载：`./scripts/install.sh --uninstall`；`--purge` 同时删除 `~/.pbmockx` 数据。
 
 ## 快速开始
 

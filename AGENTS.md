@@ -137,6 +137,7 @@ node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 
 ## 开发环境注意
 
+- **安装脚本**：`scripts/install.sh` 支持 `PBMOCKX_REF` / `--ref <branch>`；远程代码在 `~/.pbmockx/app`，数据在 `~/.pbmockx`；会替换旧的 `whistle.pbmockx` 全局链接，`--uninstall --purge` 清理数据。
 - **npm 缓存**：沙箱/权限异常时用 `npm install --cache .npm-cache`（已 gitignore）。
 - **数据目录**：测试/本地开发用 `PBMOCKX_DATA_DIR=$PWD/.dev-data` 或 `--data-dir`，避免写 `~/.pbmockx`。
 - **局域网测试**：`0.0.0.0` 绑定后用本机 LAN IP 访问 UI/API 可模拟非 loopback 来源；`ui.lanAccess=false` 应返回 403（CA 下载端点除外）。

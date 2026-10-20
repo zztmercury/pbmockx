@@ -21,6 +21,7 @@
 - **局域网访问**：`pbmockx start --lan`（或 `--host 0.0.0.0`）后，同一 LAN 的设备可用代理并打开 Web UI/控制 API；`ui.lanAccess=false` 可只暴露代理（CA 下载仍可用），CA 下载端点对 LAN 开放。`pbmockx connect-android --wifi` 支持 Wi-Fi 设备直接指向本机 LAN IP。CLI 支持非 loopback 绑定（`resolveHost`）。start/status 会打印可用 LAN 地址。
 - **Web UI**（`http://127.0.0.1:8899/`）：实时 flow 列表（Flat/Tree 两种视图，Tree 按 host + 压缩路径树聚合、默认折叠）、可拖拽列表宽度、长 URL 自动换行、请求/响应详情、交互式 PB 字段树、mock 前/后切换、规则 CRUD 与启停、mock 数据编辑、CA 下载与各平台接入指引、SSE 实时更新、深浅色主题。
 - **新 CLI 命令**：`start`、`stop`、`restart`、`status`、`logs`、`ca`；`flows/decode/rules/map-local/map-remote/doctor/status` 支持 `--json`。
+- **安装脚本**：支持 `PBMOCKX_REF` / `--ref <branch>` 安装指定分支；代码安装到 `~/.pbmockx/app`、数据保留在 `~/.pbmockx`；自动替换旧 whistle 全局链接；`--uninstall [--purge]`。
 - **原生生命周期**：detached 守护进程、`runtime.json` + pid、日志文件、端口占用诊断、优雅退出、`pbmockx fix`（构建 + 重启 + 验证）。
 - **规则启停**：`rules.yaml` 新增可选 `enabled` 字段（默认 true），UI 可直接切换。
 
