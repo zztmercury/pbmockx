@@ -152,6 +152,7 @@ node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 8. **CA 私钥权限 0600**；`pbmockx ca --regen` 需要 `--yes` 并重启 daemon。
 9. **管理面只允许 loopback**：`daemon.ts` 的 `isLocalRequest` + remoteAddress 检查；改路由时保持。
 10. **单端口自环**：目标是自身端口时返回 421/UI，不能递归代理。
+11. **请求体旁路采样必须在 pipe 同一 tick 开始**：不要在 `await planRequest()` 前 `req.on('data')` —— 那会让流进入 flowing 模式，body 在真正 pipe 到上游前被丢弃（POST 变空）。`startRequestTap()` 就是为此延后调用。
 
 ## 发版
 

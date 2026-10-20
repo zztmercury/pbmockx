@@ -11,6 +11,7 @@
  * stream. Everything else is streamed with backpressure.
  */
 
+import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
 import * as net from 'net';
@@ -57,6 +58,7 @@ interface ReqCtx {
   res: any;
   method: string;
   reqTap: BodyTap;
+  tapStarted?: boolean;
   upstream?: any;
 }
 
@@ -204,8 +206,6 @@ export class ProxyEngine {
     });
     this.events.broadcast('flow.new', flowSummary(rec));
 
-    req.on('data', (c: Buffer) => reqTap.push(c));
-    req.on('end', () => this.finishRequestRecording(ctx, reqHeaders));
     req.on('error', (e: any) => {
       this.store.upsert(id, { error: 'request stream error: ' + (e && e.message ? e.message : e) });
     });
@@ -224,21 +224,60 @@ export class ProxyEngine {
     if (plan.matched.length) this.store.upsert(id, { matchedRules: plan.matched });
 
     if (plan.localResponse) {
+      // Start the tap only now: attaching 'data' early would put the request
+      // into flowing mode while planRequest() awaits, silently dropping the
+      // body before it can be piped upstream.
+      this.startRequestTap(ctx, reqHeaders);
       const lr = plan.localResponse;
-      const headers: Record<string, any> = { ...lr.headers, 'content-length': String(lr.body.length) };
+      const headers: Record<string, any> = {
+        ...lr.headers,
+        'content-length': String(lr.size != null ? lr.size : (lr.body ? lr.body.length : 0)),
+      };
+      if (lr.filePath) {
+        // Stream large mocked files (APK/ZIP/PB) with recording sampled up to
+        // the capture cap; never buffer the whole file per request.
+        const tap = new BodyTap(this.config.capture.maxRecordBodyBytes);
+        const stream = fs.createReadStream(lr.filePath);
+        stream.on('data', (c: Buffer) => tap.push(c));
+        stream.on('error', (e: any) => {
+          log.warn('mock file stream failed:', lr.filePath, e.message);
+          try { res.destroy(); } catch {}
+          this.finalize(ctx, { status: lr.status, resHeaders: headers, error: 'mock file: ' + e.message });
+        });
+        stream.on('end', () => {
+          const dec = decompressBody(tap.buffer(), getHeader(headers, 'content-encoding'));
+          const info = detect(getHeader(headers, 'content-type'), dec.data);
+          this.finalize(ctx, {
+            status: lr.status,
+            statusText: statusText(lr.status),
+            resHeaders: headers,
+            resBody: dec.data,
+            resOriginalBody: dec.data,
+            resInfo: info || undefined,
+            mocked: true,
+            matchedRules: plan.matched,
+            resSize: lr.size || tap.total,
+            resTruncated: tap.truncated || (!!lr.size && lr.size > tap.buffer().length),
+          });
+        });
+        res.writeHead(lr.status, headers);
+        stream.pipe(res);
+        return;
+      }
+      const body = lr.body || Buffer.alloc(0);
       res.writeHead(lr.status, headers);
-      res.end(lr.body);
-      const info = detect(getHeader(headers, 'content-type'), lr.body);
+      res.end(body);
+      const info = detect(getHeader(headers, 'content-type'), body);
       this.finalize(ctx, {
         status: lr.status,
         statusText: statusText(lr.status),
         resHeaders: headers,
-        resBody: lr.body,
-        resOriginalBody: lr.body,
+        resBody: body,
+        resOriginalBody: body,
         resInfo: info || undefined,
         mocked: true,
         matchedRules: plan.matched,
-        resSize: lr.body.length,
+        resSize: body.length,
       });
       return;
     }
@@ -284,6 +323,7 @@ export class ProxyEngine {
         });
     });
     ctx.upstream = upReq;
+    this.startRequestTap(ctx, reqHeaders);
     upReq.setTimeout(300000, () => upReq.destroy(new Error('upstream socket timeout')));
     upReq.on('error', (e: any) => {
       if (!res.headersSent) {
@@ -297,6 +337,13 @@ export class ProxyEngine {
       this.finalize(ctx, { error: 'upstream: ' + e.message });
     });
     req.pipe(upReq);
+  }
+
+  private startRequestTap(ctx: ReqCtx, reqHeaders: Record<string, any>): void {
+    if (ctx.tapStarted) return;
+    ctx.tapStarted = true;
+    ctx.req.on('data', (c: Buffer) => ctx.reqTap.push(c));
+    ctx.req.on('end', () => this.finishRequestRecording(ctx, reqHeaders));
   }
 
   private finishRequestRecording(ctx: ReqCtx, reqHeaders: Record<string, any>): void {

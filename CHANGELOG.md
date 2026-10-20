@@ -16,7 +16,7 @@
 - **暂不支持 HTTP/2 / gRPC**：MITM 的 ALPN 只提供 `http/1.1`（主流客户端会自动降级），上游统一使用 HTTP/1.1；纯 h2/gRPC 接口请用 bypass 原始隧道或后续版本。
 
 ### 新增
-- **原生抓包**：HTTP/1.1 正向代理、HTTPS CONNECT 中间人、WebSocket 隧道、gzip/deflate/br、SSE 流式透传、大 body 背压转发。
+- **原生抓包**：HTTP/1.1 正向代理、HTTPS CONNECT 中间人、WebSocket 隧道、gzip/deflate/br、SSE 流式透传、大 body 背压转发；请求体旁路采样不阻塞转发。
 - **原生 Mock**：`patch`（含 `--append/--insert/--remove/--unset`、`google.protobuf.Any` 穿透）、`map_local(data|file)`、`map_remote`（含 regex，bare replacement 仍按 `https://` 处理）；`map_local` 的 `status`/`headers` 覆盖真正生效。
 - **Web UI**（`http://127.0.0.1:8899/`）：实时 flow 列表、请求/响应详情、交互式 PB 字段树、mock 前/后切换、规则 CRUD 与启停、mock 数据编辑、CA 下载与各平台接入指引、SSE 实时更新、深浅色主题。
 - **新 CLI 命令**：`start`、`stop`、`restart`、`status`、`logs`、`ca`；`flows/decode/rules/map-local/map-remote/doctor/status` 支持 `--json`。
@@ -30,7 +30,7 @@
 - `pbmockx agent-doc` / `skill install|list|uninstall` / `version [--check]` / `connect-android`。
 
 ### 验证
-- 67 条自动化测试（node:test）：核心 PB/规则/字段树、CA/TLS、HTTP/HTTPS 抓包、gzip patch、map_local/map_remote、SSE、WebSocket、2MB 透传、HEAD/204、CLI 契约。
+- 69 条自动化测试（node:test）：核心 PB/规则/字段树、CA/TLS、HTTP/HTTPS 抓包、gzip patch、map_local/map_remote、SSE、WebSocket、2MB 透传、HEAD/204、CLI 契约。
 - 手动：`curl --proxy` HTTP/HTTPS、Web UI、Android `adb reverse`（可选真机）。
 
 ## [0.6.9] - 2026-09-23

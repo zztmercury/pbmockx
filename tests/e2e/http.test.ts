@@ -164,6 +164,59 @@ test('map_local(file) streams bytes with status and header overrides', async () 
   }
 });
 
+test('records a JSON POST request body', async () => {
+  await reset();
+  const up = await startUpstream((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ got: JSON.parse(Buffer.concat(chunks).toString()) }));
+    });
+  });
+  try {
+    const r = await proxyRequest(d.port, `http://127.0.0.1:${up.port}/api/post`, {
+      method: 'POST',
+      body: JSON.stringify({ hello: 'post' }),
+      headers: { 'content-type': 'application/json' },
+    });
+    assert.deepStrictEqual(JSON.parse(r.body.toString()), { got: { hello: 'post' } });
+    const flows = await jsonApi(d.port, '/flows');
+    const detail = await jsonApi(d.port, `/flows/${flows[0].id}`);
+    assert.strictEqual(detail.reqProtocol, 'json');
+    assert.deepStrictEqual(detail.reqData, { hello: 'post' });
+  } finally {
+    await up.close();
+  }
+});
+
+test('large map_local file is streamed and recording is capped', async () => {
+  await reset();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-bigfile-'));
+  const file = path.join(tmp, 'big.bin');
+  const bytes = crypto.randomBytes(5 * 1024 * 1024);
+  fs.writeFileSync(file, bytes);
+  try {
+    await jsonApi(d.port, '/map-local', {
+      method: 'POST',
+      body: { url_pattern: `/big-${path.basename(tmp)}`, source: 'file', file_path: file },
+    });
+    const r = await proxyRequest(d.port, `http://127.0.0.1:9/big-${path.basename(tmp)}`);
+    assert.strictEqual(r.body.length, bytes.length);
+    assert.strictEqual(
+      crypto.createHash('sha256').update(r.body).digest('hex'),
+      crypto.createHash('sha256').update(bytes).digest('hex')
+    );
+    const flows = await jsonApi(d.port, '/flows');
+    const detail = await jsonApi(d.port, `/flows/${flows[0].id}`);
+    assert.strictEqual(detail.mocked, true);
+    assert.strictEqual(detail.resSize, bytes.length);
+    assert.strictEqual(detail.resTruncated, true);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('map_remote rewrites the target URL', async () => {
   await reset();
   const a = await startUpstream((req, res) => {

@@ -24,7 +24,10 @@ import type { Protocol, DetectInfo } from '../core/content-type';
 import type { MatchedRule } from '../core/flow-store';
 
 export interface LocalResponse {
-  body: Buffer;
+  body?: Buffer;
+  /** Large files are streamed instead of being buffered in memory. */
+  filePath?: string;
+  size?: number;
   status: number;
   headers: Record<string, string>;
 }
@@ -102,12 +105,19 @@ export class MockEngine {
       if (rule.type !== 'map_local' || rule.source !== 'file' || !rule.filePath) continue;
       if (!rule.matches(url)) continue;
       try {
-        const body = await fs.promises.readFile(rule.filePath);
+        const st = await fs.promises.stat(rule.filePath);
         const headers: Record<string, string> = { ...(rule.headers || {}) };
         if (!Object.keys(headers).some((h) => h.toLowerCase() === 'content-type')) {
           headers['content-type'] = inferContentType(rule.filePath);
         }
-        localResponse = { body, status: rule.status || 200, headers };
+        const LOCAL_BUFFER_LIMIT = 1024 * 1024;
+        if (st.size <= LOCAL_BUFFER_LIMIT) {
+          const body = await fs.promises.readFile(rule.filePath);
+          localResponse = { body, size: st.size, status: rule.status || 200, headers };
+        } else {
+          // APKs / zips / large PBs must not be loaded into memory per request.
+          localResponse = { filePath: rule.filePath, size: st.size, status: rule.status || 200, headers };
+        }
         matched.push({ id: rule.id, type: rule.type, phase: 'request', outcome: 'applied' });
       } catch (e: any) {
         error = `map_local ${rule.id}: ${e.message}`;
