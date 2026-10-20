@@ -1,175 +1,167 @@
 # AGENTS.md — pbmockx 开发指南
 
-面向 Agent 的高信噪比上下文。用户使用指南在 `skill/SKILL.md`（`pbmockx help`/`agent-doc` 打印）——本文件只覆盖开发者关注点。
+面向 Agent 的高信噪比上下文。用户使用指南在 `skill/SKILL.md`（`pbmockx agent-doc` 打印）——本文件只覆盖开发者关注点。
 
 ## 架构
 
-两个 Node.js 运行时，同一进程内通过插件 hook 与 CGI API 连接：
+单一 Node.js 守护进程（`pbmockxd`）同时承担代理、Mock、控制 API 和 Web UI，**不再依赖 whistle**。
 
 ```
-whistle (:8899, Node.js)  ──加载──►  whistle.pbmockx 插件（进程内）
-                                              ├─ reqRead（透传 + 记录请求体，不 mock、不阻塞）
-                                              ├─ resRead（仅 JSON/PB 且有 patch/map_local(data) 才 buffer→decode→patch→encode；否则透传记录）
-                                              ├─ resWrite/reqWrite hook（passthrough）
-                                              ├─ rulesServer（map_remote/map_local file → whistle 原生规则；rules.txt 的 `* whistle.pbmockx://` 触发）
-                                              └─ uiServer（Koa CGI，规则 CRUD + flow 查询 + decode-pb）
-
-pbmockx CLI（whistle-plugin/bin/cli.js）  ──HTTP──►  uiServer CGI（/cgi-bin/*）
-  通过 w2 exec pbmockx 或 npm link 后直接 pbmockx 调用
+pbmockx CLI ──HTTP──► pbmockxd :8899
+                        ├─ /__pbmockx/api/*   控制 API（仅 loopback）
+                        ├─ /                  静态 Web UI（web/）
+                        ├─ CONNECT / 绝对 URL  正向代理 + TLS MITM
+                        ├─ mock engine（rules.yaml + mock-data/）
+                        └─ flow store（内存 LRU + 总字节预算）
+client / Android / curl ──proxy──► pbmockxd ──► upstream
 ```
 
-- **whistle** 是宿主进程（默认 :8899），通过 `whistleConfig`（package.json）声明 `inspectorsTab`——只有 `req` 和 `res` 两个子 tab，都命名为 `"PBView"`，action 指向 `/public/pb-req.html` 与 `/public/pb-res.html`。**没有 `networkColumn`**（已按用户要求移除），也没有顶层 `name`/`action` 字段。
-- **whistle.pbmockx** 插件由 `whistle-plugin/index.js` 导出 6 个 hook（resRead/reqRead/resWrite/reqWrite/rulesServer/uiServer）。所有 hook 共享同一 Node 进程，模块级单例（`src/ctx.ts`）提供 `PBEngine`、`RuleEngine`、`FlowStore` 实例。**注意**：`rulesServer` 只在请求命中「插件协议」规则时才被 whistle 调用——`rules.txt` 自动注入的 `* whistle.pbmockx://`（长协议，只触发 hook、不转发请求）就是为此存在；`map_remote`/`map_local(file)` 全靠它动态生成规则（无需用户配置，也不写 whistle 规则文件）。
-- `whistle-plugin/src/*.ts` 编译到 `dist/src/`（tsc）。`index.js` 用 `require('./dist/src/<name>').default` 加载，try/catch 隔离单个 hook 失败。
-- `whistle-plugin/public/` 是 inspectorsTab 的 HTML——`pb-req.html` 与 `pb-res.html`（薄 HTML）+ 共享 `pb-view.js`。两 HTML 仅差 `<title>` 与 `window.__PBMOCKX_MODE`（'req'/'res'），其余 CSS+JS 共享。**外部 JS 用相对路径加载**（`<script src="pb-view.js">`）——whistle 把 `/plugin.pbmockx/public/x` 请求剥前缀转发给插件 uiServer 的 `/public/:filename` 路由 serve（**不能用绝对路径 `/public/x`**，会落到 whistle webui 404）。HTML 内通过 `whistleBridge` 拉取 session body，POST 到 `/cgi-bin/decode-pb` CGI 渲染字段树。
-- **pipe hook 接收的 body 即 HTTP 请求 body**：resRead 里响应体通过 `req` stream 传入，**响应头在 `req.headers`**（`req.originalRes` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**）；reqRead 里请求头在 `req.headers`，请求体同样通过 `req` stream 传入。
-- **gzip/deflate/br 解压**：pipe hook 在 decode 前按 `content-encoding` 用 `zlib.gunzipSync`/`inflateSync`/`brotliDecompressSync` 解压。**返回 UNCOMPRESSED body（不重新压缩）**——whistle pipe（方案二）把它当 plaintext 处理，自动剥离 `content-encoding`，客户端和 Web UI 看到的都是原始字节。
-- **Any 展开/回包**（`src/any-expand.ts`）：patch 前对包含 `google.protobuf.Any` 字段的 message 调用 `expandAny`，按 `type_url` 在 root 里查类型、把 `value` bytes 解码为内层 message 对象（替换原 Any 字段为展开后的 message）；patch path 可直接导航到内层业务字段（如 `data.value.list[0].app.title`，`data` 是 Any，`value` 是内层 message）。patch 完成后调用 `packAny` 把展开的 message 重新编码为 bytes、包回 Any。**不修改 `@type` / `type_url`**。
-- `whistle-plugin/bin/cli.js` 是 CLI 入口（package.json 的 `"bin": {"pbmockx": "./bin/cli.js"}`）。`w2 exec pbmockx <cmd>` 或 npm link 后直接 `pbmockx <cmd>`。所有命令支持 `-h`/`--help`。
-- **`whistle-plugin/rules.txt`** 是插件级规则文件（`* pipe://pbmockx`）——whistle 加载插件时自动注入，**无需用户在 Web UI 里手写 `pipe://pbmockx` 规则**。所有请求默认走 pipe；请求体只记录不 mock，响应仅 JSON/PB 且有 mock 规则才 decode→patch→encode。用户想选择性 pipe 时，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则覆盖。
-- `scripts/install.sh` 检查 Node.js≥18 → 检查/安装 whistle → 构建插件（tsc）→ `npm link`（让插件全局可用，`w2 start` 自动加载）→ 重启 whistle 加载插件 + rules.txt → skill install。`--uninstall` 反向清理：清旧 w2 add 规则 + 删除遗留的 `pbmockx-native` 原生规则文件（旧 CGI 方案遗留，best-effort）+ `w2 uninstall` + `npm unlink -g` + `pbmockx skill uninstall` + 删除克隆仓库。**不检查 lack**（dev-only 工具）。
-- **已删除的文件**（历史版本曾有）：`bin/pbmockx`（旧 Python CLI）、`scripts/start.sh`（旧 mitmproxy 启动脚本）、`addon/pbmockx_addon.py`（Python mitmproxy addon）、`scripts/start-mitmproxy.sh`（mitmproxy fallback 启动）、`whistle-plugin/public/pb-view.html`（旧独立页面，已废弃）、`whistle-plugin/src/native-rules.ts`（曾用 whistle CGI 直连注入规则文件；因与 whistle 规则文件单选模式冲突已移除，改走 rulesServer）。注：`pb-view.js` 曾被内联进 HTML，后又拆出为共享外部 JS（见上条）。
+- 入口：`bin/pbmockx.js`（CLI → `dist/src/cli/index`）、`bin/pbmockxd.js`（前台守护进程 → `dist/src/server/daemon`）。
+- 单端口路由优先级（`src/server/daemon.ts`）：`CONNECT` → 绝对 URL（代理）→ loopback origin-form（API/UI）→ 其余 origin-form（按 Host 转发）。
+- 控制 API 与 UI 只接受 loopback 来源；即使代理绑定 `0.0.0.0`，管理面也不会暴露到局域网。
+- 端口默认 8899（兼容旧 Android `adb reverse`/系统代理配置）；`PBMOCKX_PORT` / `config.json` 可改。
+- 所有可写运行时状态都在数据目录 `~/.pbmockx`（`PBMOCKX_DATA_DIR` 可覆盖）；代码目录只读。
 
-## 命令
+## 目录
+
+```
+src/core/     pb-engine, desc-cache, field-tree, path-nav, any-expand,
+              content-type, rules, flow-store, flow-view, http-body, config, logger
+src/proxy/    ca.ts（根 CA + 叶子证书）、proxy.ts（代理/MITM/WS/转发）
+src/mock/     engine.ts（请求阶段 map_remote/map_local(file)；响应阶段 patch/map_local(data)）
+src/server/   daemon.ts（启动/生命周期）、control-api.ts、static.ts、events.ts
+src/cli/      index.ts（分发/命令）、api.ts、lifecycle.ts、render.ts、args.ts、android.ts、help.ts
+web/          index.html, styles.css, app.js, tree.js, panels.js, api.js（零构建 ES Modules）
+tests/        unit/、e2e/、helpers.ts、fixtures/
+skill/SKILL.md  唯一面向用户的 agent 指南（`agent-doc` 打印）
+```
+
+## 运行时数据
+
+```
+~/.pbmockx/
+├─ config.json      可选配置（端口/host/代理/抓包上限）
+├─ runtime.json     {pid,port,host,version,startedAt,dataDir}；CLI 用它找端口
+├─ rules.yaml       规则（启动加载，add/del 自动保存；只过滤 undefined）
+├─ mock-data/       map_local(data) 的 <id>.json
+├─ ca/              ca.pem、ca.key(0600)、leaf.key(0600)
+├─ desc-cache/      .desc 条件请求缓存 + index.json
+└─ logs/pbmockxd.log
+```
+
+- **规则防清空**：`RuleEngine.save()` 在未成功读过磁盘前拒绝写入（`initialized` 标志）。不要在构造函数里绕过它。
+- **legacy 导入**：仅在默认数据目录且未显式设置 `PBMOCKX_DATA_DIR` 时，从 `<root>/whistle-plugin/rules.yaml` 等候选路径一次性复制旧规则与 mock 数据。测试/`--data-dir` 必须保持干净。
+- **数据目录迁移**：不要写代码目录下的 `rules.yaml`；所有路径走 `src/core/config.ts:paths()`。
+
+## 规则模型（rules.yaml）
+
+`RuleEngine`（`src/core/rules.ts`）字段与旧版兼容，新增可选 `enabled`（默认 true；`toDict` 只在 false 时写出）。
+
+| type | 阶段 | 关键字段 | 行为 |
+|---|---|---|---|
+| `patch` | response | `path`,`value`,`protocol`,`action`(set/append/insert/remove/unset),`index` | 在 PB message / JSON 对象上按 path 改字段；PB path 可穿透 `Any`（先 `expandAny` 再 patch 再 `packAny`） |
+| `map_local`(data) | response | `data_file`/`data`,`desc`,`messageType`,`delimited`,`status`,`headers` | 整 body 替换；缺 desc/messageType 时从响应 Content-Type 继承；PB encode 或 JSON stringify |
+| `map_local`(file) | request | `file_path`,`status`,`headers` | 直接返回本地文件字节，不访问上游；按扩展名推断 content-type |
+| `map_remote` | request | `replacement`,`is_regex` | 改写目标 URL；replacement 无 scheme 时补 `https://`（whistle 兼容）；同步 Host/SNI |
+
+- **执行顺序**：请求阶段 `map_remote`（首个命中）→ `map_local(file)`（首个命中）；响应阶段按存储顺序依次执行 `map_local(data)` / `patch`。
+- **匹配**：`new RegExp(url_pattern).test(url)`；非法正则回退子串 `includes`。`protocol` 字段存在时只对对应响应协议生效。
+- **value 语义**：`toDict()` 只过滤 `undefined`——`false`/`null`/`0`/`''` 真实写入并持久化；删除键用 `action: unset`（`null` ≠ `unset`）。
+- **错误**：任何 patch/encode/decode 失败都返回原始 body 并把原因写进 `patchError`/`decodeError`；绝不返回半截/半改响应。
+- **去重**：`add()` 对同 `url_pattern + type` 替换（patch 还比较 `path`）；规则 ID 是 8 位 hex。
+
+## 抓包流水线（src/proxy/proxy.ts）
+
+- **请求**：立即建 flow 记录（id `${Date.now()}-${三位序号}`）→ 请求阶段规则 → 本地响应或流式转发上游。请求体旁路采样（cap），永不因 mock 阻塞。
+- **响应**：记录状态/头/首字节 → 仅当 Content-Type 为 JSON/PB、非 SSE、非 HEAD/204/304 且存在响应阶段规则时才 `collectBody`。否则 `pipe` 透传 + 旁路采样。
+- **改写**：解压（gzip/deflate/br，按编码链逆序）→ `detect`（desc/messageType 来自 Content-Type）→ 解码 → `expandAny` → 规则 → `packAny` → 编码 → 按原编码重新压缩（失败则丢弃 `content-encoding`）→ 修正 `content-length` → 下发。原始未压缩 body 存 `resOriginalBody` 供 `--original`/UI 对比。
+- **不缓冲**：SSE（`text/event-stream`）和超 `capture.maxRewriteBodyBytes` 的响应直接流式透传；记录侧 `maxRecordBodyBytes` 截断并标记 `truncated`。
+- **头部**：请求转发剥离 hop-by-hop（`connection`/`keep-alive`/`proxy-*`/`te`/`trailer`/`transfer-encoding`/`upgrade`）并重写 `Host`；响应剥离 hop-by-hop，改写时删旧 `content-length`。`set-cookie` 数组保留。
+- **上游 TLS**：默认校验；目标为 loopback/私网或全局关闭时跳过校验（本地 HTTPS mock server 场景）。上游 HTTP/1.1。
+- **WebSocket**：外层与 MITM 内层都监听 `upgrade`，手工发 upgrade 握手并双向 pipe；只记录 101/字节数，不解析帧。
+- **自环**：目标是本机同端口时返回 421，避免代理递归。
+
+## CA / TLS MITM（src/proxy/ca.ts）
+
+- 首次启动生成根 CA（RSA 2048、SHA-256、10 年、`CA:TRUE`，私钥 0600）；叶子证书复用一张常驻 `leaf.key`，按 CONNECT host 签发并内存缓存，SAN 覆盖 DNS/IP。
+- CONNECT 流程：`ca.getLeafPems(host)` → 回 `200 Connection Established` → `socket.unshift(head)`（客户端可能已发 ClientHello）→ 每连接一个 `tls.createServer({key,cert,ALPNProtocols:['http/1.1']})` → `tlsServer.emit('connection', socket)` → 握手完成后 `innerHttpServer.emit('connection', tlsSocket)`。
+- **ALPN 只提供 `http/1.1`**：主流客户端会降级；gRPC/纯 h2 不支持，走 bypass 原始隧道。
+- **只对 `proxy.mitmPorts`（默认 443/8443）做 MITM**；空数组 = 所有端口（测试用）。bypass 列表支持 `*.example.com`/`.example.com`/子域匹配。
+- **不要给 IP 设置 `servername`**：Node `https.request`/`tls.connect` 会报 “Setting the TLS ServerName to an IP address is not permitted”。代码用 `isIpLiteral()` 判断。
+- `cert.sign()` 必须用 CA key；`getLeafPems` 有并发单飞去重。CA 重新生成后旧叶子缓存必须清空（`regenerate()` 已处理）。
+
+## Flow / API
+
+- `FlowStore` 同时按条数（`capture.maxFlows`）和总 body 字节（`capture.maxTotalRecordBytes`）淘汰；`upsert` merge 请求与响应，`rev` 自增用于详情缓存失效。
+- `FlowRecord` 主体字段见 `src/core/flow-store.ts`；`resBody` 是 patch 后（未压缩），`resOriginalBody` 是 patch 前；`resInfo` 保存 desc/messageType/delimited。
+- API 响应形状尽量 1:1 沿用旧 CGI，CLI 依赖：`/health`、`/flows`、`/flows/:id?original=1`、`/rules`、`/map-local`、`/ca.pem`、`/events`。详见 `src/server/control-api.ts`。
+- 字段树由服务端 `buildFieldTree` 构建（PB）并按 `id:rev:original` 缓存 200 条；JSON/form 在 API 层解析。
+- SSE 事件：`flow.new` / `flow.update` / `rules.changed`；`EventHub` 每 15s ping。
+- `/cgi-bin/rootca` 与 `/cgi-bin/health` 是兼容别名。
+
+## CLI
+
+- `src/cli/index.ts` 手写 argv 分发；`args.ts` 保留 `rules add` 的历史解析（含 `_parseRulesAddArgs`/`_buildPatchRule`/`_parseValue` 旧名）。
+- 输出契约：`flows` 列 `id method status proto url`；`decode` 的 `=== Request/Response ===`、折叠字段树、`--path/--full/--original/--headers` 行为与旧版一致；`rules list` 列 `id type url path value`。
+- 所有读命令支持 `--json`；新增 `start/stop/restart/status/logs/ca`。
+- `--data-dir <dir>` 是全局参数：`main()` 在分发前把它转成 `PBMOCKX_DATA_DIR` 并移除，测试/多实例都用它。
+- `doctor` 只做检查（退出码 0）；`fix` = `tsc` → restart → health verify。
+- 进程管理：`start` detached spawn `bin/pbmockxd.js`，日志重定向到数据目录；等待 health；`stop` SIGTERM→SIGKILL；`runtime.json` 是 CLI 找端口的权威来源。
+- `connect-android`：`adb reverse tcp:<port> tcp:<port>` + `settings put global http_proxy`；证书状态复用 `android.ts` 的纯函数（system/user/not_found/unknown）。
+
+## Web UI（web/）
+
+- 零构建原生 ES Modules；由 `src/server/static.ts` 从 `web/` 提供。不要引入 CDN 或打包器。
+- `app.js`：状态、flow 列表/详情、SSE、抽屉/弹窗、快捷键；`tree.js`：PB/JSON 懒加载树；`panels.js`：规则与 CA/setup 面板；`api.js`：`/__pbmockx/api` fetch 封装。
+- 大响应注意懒加载：树节点只在首次展开时构建 DOM；raw/hex 视图限 64KB/400KB 显示。
+- 安全：`static.ts` 下发 CSP（self + inline style），无外链/CDN；控制 API 的 loopback 检查在 daemon 层。
+
+## 测试
 
 ```bash
-# 安装
-./scripts/install.sh    # 检查 Node≥18 + whistle + 构建 + npm link + skill
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh)"  # 远程一行
-
-# 启动
-w2 start                                 # npm link 后插件全局可用，w2 自动加载（含 rules.txt）
-# 本地开发用 w2 start -A whistle-plugin 也可直接加载插件目录
-
-# CLI（pbmockx 命令，通过 npm link 或 w2 exec；所有命令支持 -h/--help）
-pbmockx flows [--filter <regex>]                          # 列出已 decode 的 flow（单 ID 同时含 req+res，无 dir 列）
-pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full]
-                                                          # 显示 headers + body（PB 用 renderTree）
-                                                          #   默认折叠模式（节省 token）：顶层 scalar 显示值，
-                                                          #     嵌套 message/repeated 显示 (type, N) ▸，长字符串截断
-                                                          #   --path <path> 导航到子树（折叠显示），路径含 [n] 需加引号
-                                                          #   --full        完整展开所有层级（不截断）
-pbmockx rules add|list|del|save|reload ...               # patch 规则 CRUD（path 可穿透 google.protobuf.Any）
-                                                        #   add 支持 --append/--insert <idx>/--remove <idx> 操作 repeated 字段条目；--unset 删除字段（缺省整体替换）
-pbmockx map-local add|list|del ...                        # map_local 规则（--data/--file）
-pbmockx map-remote add|list|del ...                       # map_remote 规则（--regex）
-pbmockx web                                                # 打开 whistle Web UI
-pbmockx connect-android [-s <serial>]                     # Android 代理配置 + 证书状态检测（system/user/not_found/unknown；用户证书目录受 SELinux 保护，非 root 无法自动确认 → unknown）
-pbmockx doctor                                             # 全链路检查（node/whistle/plugin/link/version）
-pbmockx fix                                                # 自动修复：总是 rebuild（tsc）→ npm link → w2 restart → verify
-pbmockx agent-doc                                          # 打印 SKILL.md
-pbmockx skill install|list|uninstall                      # 安装 SKILL.md 到 agent 目录（~/.agents + ~/.claude）
-pbmockx version [--check]                                  # 版本（可选检查 GitHub release）
-w2 exec pbmockx <cmd>                                      # 未 npm link 时的替代调用
-
-# 测试（100% Node.js）
-cd whistle-plugin && npm test              # tsc + node -e "require('./dist/tests/test_pb-engine').run()"
-
-# 开发
-cd whistle-plugin && npx tsc -w            # watch 模式编译
-lack watch                                 # 如已安装 lack（dev-only）
-
-# Lint / typecheck
-cd whistle-plugin && npx tsc --noEmit
+npm run typecheck
+npm test                 # tsc + node --test dist/tests/
+node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 ```
 
-`npm test` 先跑 `tsc` 编译 `src/*.ts` + `tests/*.ts` 到 `dist/`，再 `require('./dist/tests/test_pb-engine').run()` 跑单元测试。`whistle-plugin/tests/test_server.ts` 是 protobufjs 构建的 mock server（用于 resRead pipe 端到端验证）。无测试框架——纯 assert + `run()` 入口。
+- `tests/unit/core.test.ts`：PB 引擎/路径/规则/字段树/协议识别/CLI 参数/Android 纯函数（40 条）。
+- `tests/unit/support.test.ts`：FlowStore 边界、压缩、header、CA、MockEngine、config。
+- `tests/e2e/http.test.ts`：HTTP 抓包、patch、gzip、map-local/map-remote、SSE、2MB 透传、HEAD/204、WebSocket、CLI 契约。
+- `tests/e2e/https.test.ts`：CONNECT MITM、HTTPS patch、CA 端点。
+- `tests/e2e/pb.test.ts`：PB 字段树、patch + original、patch_error 回退。
+- **测试陷阱**：daemon 与测试同进程时，**不要用 `spawnSync` 调 CLI**（阻塞事件循环导致 CLI 等不到 daemon）；用异步 `spawn`。上游服务器 close 时要 `closeAllConnections()`（upgrade socket 不会被 close 等待）。
+- 集成测试用 `tests/helpers.ts`：临时数据目录、随机端口、上游 HTTP/HTTPS、CONNECT 客户端、`jsonApi`。
 
-## 规则引擎（4 种类型）
+## 开发环境注意
 
-`RuleEngine`（`whistle-plugin/src/rules.ts`）——统一规则存储，`type` 字段选择属性：
-
-| type | 落点 | 关键字段 | 作用 |
-|---|---|---|---|
-| `patch` | resRead（pipe） | `path`, `value`, `protocol`, `action`(`set`/`append`/`insert`/`remove`/`unset`), `index` | 在 message 对象上按 path set 字段（path 可穿透 `google.protobuf.Any`——pipe hook 先 `expandAny` 再 patch 再 `packAny`），fromObject→encode；`action` 对 repeated 字段做条目级新增/插入/删除，`unset` 删除 path 键 |
-| `map_local` (data) | resRead（pipe） | `data_file`, `desc`, `messageType` | 整 body 替换为外部 JSON 文件，PB encode 后下发 |
-| `map_local` (file) | rulesServer（每请求动态生成） | `file_path` | 生成 whistle `file://` 原生规则，whistle 在请求阶段替换 body（**不要用 `rawfile://`**：>16KB 会空响应，见「关键陷阱」） |
-| `map_remote` | rulesServer（每请求动态生成） | `replacement`, `is_regex` | 生成 whistle `https://` / 正则原生规则，重写 url + Host |
-
-**执行顺序**：`map_remote(whistle 原生, request) → map_local file(whistle 原生, request) → map_local data(resRead, response) → patch(resRead, response)`。前两类在请求阶段由 whistle 原生规则处理（规则由 rulesServer 动态生成，`rules.txt` 长协议触发）；后两类在响应阶段由 pipe resRead 处理。
-
-- **rules.yaml** 存储所有规则（js-yaml 读写）。启动时加载（`RuleEngine.reload`），add/del 时自动保存（`RuleEngine.save`）。`.gitignore` 排除 `rules.yaml`（运行时生成），仓库里有 `rules.yaml.example` 作为模板。
-- **map_local data** 的 mock 数据存在 `whistle-plugin/mock-data/<id>.json` 外部文件，规则里只存 `data_file` 引用。`.gitignore` 排除 `mock-data/`。
-- **规则 ID**：`crypto.randomBytes(4).toString('hex')`（8 字符 hex）。
-- **pipe 触发条件**：只有匹配 `pattern pipe://pbmockx` 的请求才会进入 resRead/reqRead。插件加载时通过 `whistle-plugin/rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，无需用户手动配置；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。
+- **npm 缓存**：沙箱/权限异常时用 `npm install --cache .npm-cache`（已 gitignore）。
+- **数据目录**：测试/本地开发用 `PBMOCKX_DATA_DIR=$PWD/.dev-data` 或 `--data-dir`，避免写 `~/.pbmockx`。
+- 运行时依赖只有 `protobufjs`、`long`、`js-yaml`、`node-forge`；不要重新引入 koa/whistle。
+- Node ≥ 18（`node:test` 可用）；TypeScript 不开 strict，编译到 `dist/`。
+- 无测试框架，使用 `node:test` + `assert`；测试文件编译后由 `node --test dist/tests/` 执行。
 
 ## 关键陷阱
 
-### PB 类型不匹配（已大幅缓解，但仍需注意）
-protobufjs 直接操作 message 对象（`fromObject`/`toObject`），**不做 JSON 中转**——避免了 Python 时代 int64→string / enum→string name 的歧义。但仍有边界：
-- **int64/uint64** → JS `number`（protobufjs 默认，超出 `Number.MAX_SAFE_INTEGER` 才用 `long`）。patch 时传 `123`（number）或字符串数字。`"sku1"` 这种非数字字符串仍会 encode 失败。
-- **enum** → JS `number`（不是字符串名）。patch 时传数字或名字（`fromObject` 接受两者）。
-- **bytes** → `Uint8Array` 或 base64 字符串（取决于 decode 模式）。patch 时传 base64 字符串最稳妥。
-- **google.protobuf.Any** → 有 `@type` 元数据。**不要修改 `@type`**。
-- **加 patch 规则后务必检查 `patch_error`**（decode 输出里能看到 encode 失败原因）。
+1. **`servername` 不能是 IP**（见上）；IPv6 地址要先用 `stripBrackets()` 去掉 `[ ]` 再用于 `net.connect`/`https.request`（`target.host` 仍保留方括号作为 Host 头）。
+2. **`Expect: 100-continue`** 交给 Node 处理；不要吞掉请求体。
+3. **改写后必须删旧 `content-length`**，否则客户端截断；压缩失败要删 `content-encoding`。
+4. **SSE 绝不能 buffer**：即使有 patch 规则也不改写（`needsMock` 排除 `isEventStream`）。
+5. **大 body**：记录 cap 与改写 cap 分离；记录截断要标记，详情解码时提示。
+6. **patch 失败回退**：`MockEngine.transformResponse` 返回 `{patched:false, patchError}`，代理必须发原始字节。
+7. **规则保存**：不要在未 reload 的情况下调用 `save()`，否则可能覆盖磁盘规则（已有守卫，勿移除）。
+8. **CA 私钥权限 0600**；`pbmockx ca --regen` 需要 `--yes` 并重启 daemon。
+9. **管理面只允许 loopback**：`daemon.ts` 的 `isLocalRequest` + remoteAddress 检查；改路由时保持。
+10. **单端口自环**：目标是自身端口时返回 421/UI，不能递归代理。
 
-### map_local data 缺 desc/messageType 会 encode 失败
-map_local(data) 需要 `desc`（.proto 描述符 base64 或文件路径）+ `messageType` 才能 PB encode。缺一个就用 `JSON.stringify` 兜底（非 PB body）。`data_file` 指向 `mock-data/<id>.json`，文件内容是已 decode 的 JSON 对象。
-
-### Patch 直接操作 message 对象
-Patch 不再走 dict→JSON→re-encode。直接在 `decodeDelimited` 返回的 message 对象上 `set_by_path`，再 `encodeDelimited`。`fromObject` 会做类型强转（字符串数字→number），但仍受 PB 类型约束（int64 不能传非数字字符串）。规则序列化（`toDict()`）**只过滤 `undefined`**——`false` / `null` 会真实写入 body 并持久化到 rules.yaml（`0`/`''`/对象/数组亦然）。删除键用 `action: unset`：`null` = 键存在且值为 `null`，`unset` = 键不存在，二者语义不同。
-
-### pipe 只对匹配 `pattern pipe://pbmockx` 的请求触发
-resRead/reqRead 是单向 pipe hook——**只对配置了 `pipe://pbmockx` 的 pattern 生效**。插件加载时通过 `rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，所以默认所有请求都走 pipe；用户也可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则做选择性 pipe。未走 pipe 的请求，patch/map_local(data) 不生效（但 map_remote/map_local(file) 由 rulesServer 动态生成的原生规则处理，与 pipe 无关）。
-
-**请求体永不 mock、不阻塞**：reqRead 按 chunk 立刻转发并旁路记录 raw body（`tapAndPassthrough`），decode 只在 CLI/`decode --req` 时按需做。reqWrite 一律透传。
-
-**响应只在 JSON/PB + 有 mock 规则时才 buffer**：resRead 看 `Content-Type` 是否 JSON/PB，且 `hasDataRules(url)`（patch / map_local data）。命中才 `readBody` → decode → patch → encode；否则按 chunk 透传并旁路记录。SSE 永远 `passthroughPipe`。map_remote / map_local(file) 不走 pipe mock 路径（由 whistle 原生规则在请求阶段处理，响应根本到不了 pipe）。
-
-### map_local(file) / map_remote 走 rulesServer（rules.txt 长协议触发）
-whistle 只在请求命中「插件协议」规则时才调用插件 `rulesServer`。因此 `whistle-plugin/rules.txt` 自动注入 `* whistle.pbmockx://`——**必须用长协议**：它只触发 hook、**不会**转发/改写请求；短协议 `pbmockx://` 会把请求交给插件 server（pbmockx 没有 server hook，行为不可预期），不要用。命中后 whistle 每请求调用一次 rulesServer，取回 `toWhistleRules()` 生成的原生规则文本（`file://` / `https://` / `statusCode://`），合并优先级高于全局规则。
-
-- **即改即生效**：`rules.yaml` 变更后下一个请求就是新规则（无缓存、无同步步骤）；`pbmockx rules reload` 只是重读 rules.yaml。
-- **rulesServer 必须永远回包**：whistle 对 rules 请求有 16s 超时 + 多次重试，handler 抛错会拖住请求。已用 try/catch 包裹，任何分支都 `res.end()`。
-- **不要用「直连 whistle CGI 注入规则文件」的方案**（v0.6.8 前短暂实现过，已移除）：whistle 默认 `multiSelect: false`，`rules/select` 是单选——注入会**把用户已选的规则文件挤掉**（实测选中 A 即取消选中 B），导致用户自己的 whistle 规则被静默禁用；用户改选自己的文件也会让我们的 mock 静默失效。
-- **`file://` 而不是 `rawfile://`**：whistle 的 `rawfile://` 按「内嵌 HTTP 头」解析文件（扫描 CRLFCRLF，上限 256KB），实测 >16KB 响应直接断连（客户端 `Empty reply from server`；1KB/16KB 正常，64KB/100KB/1.4MB 复现）。`file://` 流式 + 支持 Range，1.4MB/10MB 实测字节一致。
-- **大响应经 pipe 偶发丢尾字节（已修复）**：根因在 `lib/plugins/load-plugin.js` `emitHttpPipe`——`encoder.pipe(socket)` 在 `socket.write()` 返回 false 时会把 encoder **pause**，此时已打包的帧（含终止帧 `\n0\n`）滞留在 `encoder.readableLength`；whistle 2.10.10 的 `'finish'` 监听同步调用 `socket.end()`，pause 中的帧永远不会写出、socket 队列里的字节也被 FIN 截掉。对端 decoder 在 socket `'end'`（收到 FIN）时无条件 `push(null)`，主进程把截断当正常结束，客户端看到「HTTP 200 + chunked 正常终止但 body 偏短」，丢失量为整数个 64KB 帧（实测 1.4MB 透传 5/12 截断、raw 终止符完整）。修复：`scripts/patch-whistle-pipe.js`（v2，marker `pbmockx-pipe-flush`）在 finish 时 `resume()` 被 pause 的 encoder，等 `encoder.readableLength === 0 && socket.writableLength === 0` 再 `socket.end()`。修复后实测：1.4MB 20/20、3.5MB 8/8、11.5MB 3/3 字节一致；mock/patch/map_local(data)/大 POST/SSE/小响应回归通过。`pbmockx fix` / `install.sh` 自动重打；`w2` 升级后需重跑（上游尚无该问题记录，值得反馈）。
-
-### pipe hook 的头与 body 位置（容易踩坑）
-- **resRead**：响应头在 `req.headers`（`req.originalRes.headers` 只有 `serverIp` 和 `statusCode`，**不含完整响应头**——别去 `req.originalRes.headers` 拿 content-type/encoding）。响应体通过 `req` stream 传入（pipe hook 把它当作 HTTP 请求 body 接收）。
-- **reqRead**：请求头在 `req.headers`，请求体通过 `req` stream 传入。
-- 读 body：有 mock 规则时用 `readBody(req)`（`src/helpers.ts`）聚合 chunk；无规则 / 请求侧用 `tapAndPassthrough`（边转发边收集）。
-- **pipe CONNECT socket 拆除丢未刷出字节**（上游 bug，两代，均已由补丁处理）：① ≤2.10.9 是 `socket.on('end', destroySocket)`——incoming FIN 把未刷出的 pipe 字节 RST 掉；② 2.10.10 起上游删掉该 listener、改为在 encoder `'finish'` 里 `socket.end()`，但背压下 pipe 已把 encoder pause、帧还滞留在 readable（含终止帧），同步半关闭直接把它们丢掉（见上一条）。`scripts/patch-whistle-pipe.js` 同时处理两代（v1 marker `pbmockx-pipe-end` / v2 marker `pbmockx-pipe-flush`）。备份 `load-plugin.js.pbmockx-pipe-bak`。`w2` 升级后需重跑补丁。
-- **whistle 复用已关闭的 HTTP/2 session 会 abort 整次请求**（上游 bug）：`lib/https/h2.js` 缓存 `Http2Session`，不检查 `closed`/`destroyed`。异步 `ERR_HTTP2_INVALID_SESSION` 走到 `init.js abort()` → `_closed`，把还在握手的 reqRead/reqWrite CONNECT 一起拆掉，客户端一直等到超时。没有插件时同一 H2 bug 仍在，但不会卡在 pipe CONNECT 上。`scripts/patch-whistle.sh` 丢掉死 session（lookup + `close` 时清 cache）；无 body 才 `callback()` 回退 HTTP/1.1，已开始发 body 的 POST 回 502、不重放（备份 `h2.js.pbmockx-h2-bak`）。
-- **SSE / 非 JSON·PB / 无 mock 规则不能 `readBody`**：`Content-Type` / `Accept` 含 `text/event-stream` 时走 `passthroughPipe`（按 chunk `write`）；其它无 mock 的响应走 `tapAndPassthrough`。否则会等流结束才转发、客户端收不到事件。
-
-### gzip/deflate/br 必须先解压再 decode
-pipe hook 在 decode 前按 `content-encoding` 用 `zlib.gunzipSync`/`inflateSync`/`brotliDecompressSync` 解压。**encode 后返回 UNCOMPRESSED body（不重新压缩）**——whistle pipe（方案二）把它当 plaintext 处理，自动剥离 `content-encoding`，所以客户端和 Web UI 看到的都是原始字节。如果跳过解压直接 decode，gzip 流会被当成 PB 解析失败。
-
-### Extra WKT 加载 + `Root.fromDescriptor` monkey-patch
-protobufjs `common` 只内置 7 个 WKT（any/timestamp/duration/struct/wrappers/field_mask/empty）。但 TapTap 的 `.desc` 里有自定义 extension 扩展 `google.protobuf.MethodOptions`/`FieldOptions` 等，这些 Options 类型不在 `common` 里。`pb-engine.ts` 做两件事：
-
-1. **加载 4 个额外 WKT**——从 `protobufjs/google/protobuf/*.json` 通过 `root.addJSON()` 注入：`descriptor.json`（关键，定义 `MethodOptions`/`FieldOptions` 等 Options 类型）、`api.json`、`source_context.json`、`type.json`。
-2. **Monkey-patch `Root.fromDescriptor`**——原版内部会调用 `resolveAll()`，对未解析的扩展直接抛错。我们临时把 `resolveAll` 替换成 no-op，调完原 `fromDescriptor` 再恢复，最后由我们自己在 try/catch 里调 `resolveAll()`（非致命错误可忽略——custom options 只是元数据，不影响 decode/encode）。
-
-### 没有 breakpoint 功能（v0.4.0 移除）
-web 交互式断点难以设计，已移除。**一律用 patch 规则**实现响应修改。
-
-## 约定
-
-- **`skill/SKILL.md` 是唯一真理来源**——`pbmockx help`/`agent-doc` 打印它。改动会传播给所有 agent。保持 frontmatter（`name`、`description` 及触发词）完整。
-- CLI 在 `whistle-plugin/bin/cli.js`（Node.js），通过 `w2 exec pbmockx` 或 npm link 后直接 `pbmockx` 调用。手写 argv 分发，`cmd_<verb>` 函数。**所有命令支持 `-h`/`--help`**。`decode <id>` 显示 headers + body，支持 `--req`/`--res`（只看请求或响应）/`--original`（pre-patch 原始数据）/`--path <path>`（导航到子树，折叠显示）/`--full`（完整展开）。**默认折叠模式**（v0.4.0 新默认）：顶层 scalar 显示值，嵌套 message 显示 `(type, N fields) ▸`，repeated 显示 `(repeated type, N items) ▸`，长字符串截断到 80 字符——适合 AI agent 节省 token。PB 输出用 `renderTree`（`field-tree.ts`）渲染成字段树。
-- **flow_store**（`src/flow-store.ts`）：**upsert by session ID**——同一个 whistle session ID（如 `1784529570691-003`）同时持有 request 和 response 数据（v0.4.0 合并了 REQ/RES 双 ID）。reqRead 上报时 upsert 到 `req` 字段，resRead 上报时 upsert 到 `res` 字段，**不创建新条目**。`flows` 列表每条请求一行（无 `dir` 列），`decode <id>` 同一 ID 同时显示 Request 和 Response（`--req`/`--res` 只过滤显示哪部分，不是找另一个 flow）。LRU 上限（满后淘汰最旧的）。
-- **`lack` 是 dev-only 工具**——不在 `install.sh` 里，不写入 dependencies。开发者自行安装用于 watch/reload。
-- **Node.js ≥ 18**（`install.sh` 强制）。protobufjs v7 + `ext/descriptor`（需要 Node 18+ 的 `URL`/`fetch` 支持）。
-- **TypeScript，不开 strict 模式**（`tsconfig.json` 未设 `"strict": true`）。源码在 `src/`，编译到 `dist/src/`；测试在 `tests/`，编译到 `dist/tests/`。
-- 运行时依赖：`protobufjs` + `long` + `js-yaml` + `koa` + `@koa/router` + `koa-bodyparser`。dev 依赖：`typescript` + `@types/*`。
-- **inspectorsTab 共享外部 JS**——`whistle-plugin/public/pb-view.js` 是共享逻辑，`pb-req.html`/`pb-res.html` 是薄 HTML（仅差 title + `window.__PBMOCKX_MODE`），用 `<script src="pb-view.js">` 相对路径引用。**必须相对路径**（不能用绝对 `/public/pb-view.js`，会落到 whistle webui 404）；请求 `/plugin.pbmockx/public/pb-view.js` 被 whistle 剥前缀转发给插件 uiServer 的 `/public/:filename` 路由 serve。`whistleBridge` 由 whistle 的 tab.html 模板同步注入，共享 JS 执行时已可用。uiServer 的 `PUBLIC_DIR` 必须指向 `whistle-plugin/public`（`dist/src/uiServer` 起 3 个 `..`）。
-- **whistleBridge API**：用 `bridge.addSessionActiveListener(handleSession)` 订阅 session 切换（不是 `bridge.on('sessionActive')`——那个 API 不存在；HTML 里有 fallback 但首选前者）。init 时还要调 `bridge.getActiveSession()` 处理当前已选中的 session。
-- **field-tree.ts**：`buildFieldTree` 是 **async**（因为要解码 `google.protobuf.Any` 的嵌套 message），需要传 `root` 参数以便按 `type_url` 查 Any 的内部类型。`renderTree` 输出格式：`name#N`（带字段号）、空字段显示 `(unset)`、enum 显示 `数字 (名字)`、bytes 显示 base64 截断 + 字节数、Any 显示 `Any → TypeName` 后展开嵌套字段。
-- **Legacy addon 已删除**：`addon/pbmockx_addon.py` 和 `scripts/start-mitmproxy.sh` 已移除，不再保留 Python fallback。
-- `pbmockx.log` / `flowmock.log` 是运行时日志（whistle daemon 的 stdout/stderr 重定向）。`.gitignore` 排除 `*.log`。
-- Git：main 分支。发版 = `git tag vX.Y.Z` + `gh release create`。VERSION 文件是权威版本来源，`whistle-plugin/package.json` 的 `version` 字段同步。
-
-## 版本 + 发版流程
+## 发版
 
 ```bash
-echo "0.4.0" > VERSION
-# 同步 whistle-plugin/package.json 的 "version" 字段
+echo "1.0.0" > VERSION
+# 同步 package.json 的 version
 # 更新 CHANGELOG.md
-git add VERSION whistle-plugin/package.json CHANGELOG.md && git commit -m "release: v0.4.0"
-git tag v0.4.0 && git push && git push --tags
-gh release create v0.4.0 --notes-file CHANGELOG.md --title "v0.4.0"
+git add VERSION package.json CHANGELOG.md && git commit -m "release: v1.0.0"
+git tag v1.0.0 && git push && git push --tags
+gh release create v1.0.0 --notes-file CHANGELOG.md --title "v1.0.0"
 ```
 
-`pbmockx doctor` 非阻塞请求 `releases/latest` API 检测新版本（缓存 1h，`~/.pbmockx/.version_cache`）。VERSION 文件是权威版本来源，CLI 启动时读取并与 GitHub release 比对。
+`VERSION` 是权威版本来源；`pbmockx version` 读取它，`doctor`/UI 显示它。`version --check` 非阻塞请求 GitHub releases。
