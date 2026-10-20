@@ -297,6 +297,8 @@ pre.hex { white-space: pre; }
   background: var(--bg-soft); cursor: pointer; border-bottom: 1px solid var(--border);
 }
 .flow-row.group-row:hover { background: var(--bg-hover); }
+.flow-row.group-row.has-selected { box-shadow: inset 2px 0 0 var(--accent); }
+.tree-hint { padding: 10px 14px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .flow-row.host-row { font-weight: 600; }
 .flow-row.host-row .host-label { color: var(--text); font-size: 12px; overflow-wrap: anywhere; }
 .flow-row.endpoint-row { font-weight: 400; }

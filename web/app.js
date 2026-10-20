@@ -22,7 +22,7 @@ const state = {
   bodyCache: new Map(),
   detailTimer: null,
   listMode: localStorage.getItem('pbmockx-list-mode') || 'flat',
-  treeClosed: loadSet('pbmockx-tree-closed'),
+  treeOpen: loadSet('pbmockx-tree-open-v2'),
 };
 
 const els = {
@@ -331,7 +331,8 @@ function compressPathNode(node) {
 }
 
 function hostRow(h, open) {
-  const row = el('div', 'flow-row group-row host-row');
+  const selectedInside = h.flows.some((f) => f.id === state.selectedId);
+  const row = el('div', 'flow-row group-row host-row' + (selectedInside ? ' has-selected' : ''));
   row.title = h.host + ' — ' + h.flows.length + ' request(s)';
   row.appendChild(el('span', 'disclosure', open ? '▾' : '▸'));
   row.appendChild(el('span', 'host-label', h.host));
@@ -340,16 +341,24 @@ function hostRow(h, open) {
   row.appendChild(el('span', 'spacer'));
   if (h.latest) row.appendChild(el('span', 'last-dur', timeOf(h.latest.ts)));
   row.addEventListener('click', () => {
-    if (open) state.treeClosed.add(h.key);
-    else state.treeClosed.delete(h.key);
-    saveSet('pbmockx-tree-closed', state.treeClosed);
+    if (open) state.treeOpen.delete(h.key);
+    else state.treeOpen.add(h.key);
+    saveSet('pbmockx-tree-open-v2', state.treeOpen);
     renderFlows();
   });
   return row;
 }
 
+function nodeHasSelected(node) {
+  if (node.flows.some((f) => f.id === state.selectedId)) return true;
+  for (const child of node.children.values()) {
+    if (nodeHasSelected(child)) return true;
+  }
+  return false;
+}
+
 function pathGroupRow(host, node, depth, open) {
-  const row = el('div', 'flow-row group-row endpoint-row');
+  const row = el('div', 'flow-row group-row endpoint-row' + (nodeHasSelected(node) ? ' has-selected' : ''));
   const count = nodeTotal(node);
   row.title = host.host + (node.path || '/') + ' — ' + count + ' request(s)';
   row.style.paddingLeft = (12 + depth * 16) + 'px';
@@ -360,9 +369,9 @@ function pathGroupRow(host, node, depth, open) {
   if (node.latest && node.latest.durationMs !== undefined) row.appendChild(el('span', 'last-dur', fmtDuration(node.latest.durationMs)));
   const key = 'p:' + host.host + '|' + node.path;
   row.addEventListener('click', () => {
-    if (open) state.treeClosed.add(key);
-    else state.treeClosed.delete(key);
-    saveSet('pbmockx-tree-closed', state.treeClosed);
+    if (open) state.treeOpen.delete(key);
+    else state.treeOpen.add(key);
+    saveSet('pbmockx-tree-open-v2', state.treeOpen);
     renderFlows();
   });
   return row;
@@ -376,7 +385,7 @@ function renderPathNode(host, node, depth, frag, basePath = '') {
   }
   const cur = compressPathNode(node);
   const key = 'p:' + host.host + '|' + cur.path;
-  const open = !state.treeClosed.has(key);
+  const open = state.treeOpen.has(key);
   frag.appendChild(pathGroupRow(host, cur, depth, open));
   if (!open) return;
   for (const f of cur.flows) frag.appendChild(flowRow(f, depth + 1, cur.path));
@@ -385,12 +394,17 @@ function renderPathNode(host, node, depth, frag, basePath = '') {
 
 function renderTree(list) {
   const frag = document.createDocumentFragment();
+  let openHosts = 0;
   for (const h of buildTree(list)) {
-    const open = !state.treeClosed.has(h.key);
+    const open = state.treeOpen.has(h.key);
+    if (open) openHosts++;
     frag.appendChild(hostRow(h, open));
     if (!open) continue;
     for (const f of h.root.flows) frag.appendChild(flowRow(f, 1));
     for (const child of h.root.children.values()) renderPathNode(h, child, 1, frag);
+  }
+  if (openHosts === 0 && list.length) {
+    frag.appendChild(el('div', 'tree-hint', 'Groups are collapsed — click a host to expand. Use ⊞ / ⊟ for everything.'));
   }
   return frag;
 }
@@ -419,34 +433,21 @@ function renderFlows() {
   els.flowList.appendChild(frag);
 }
 
-function ensureTreeVisible(flow) {
-  if (!flow) return;
-  const u = splitFlowUrl(flow);
-  const hostName = u.host || '(unknown host)';
-  state.treeClosed.delete('h:' + hostName);
-  let path = '';
-  for (const seg of (u.pathname || '/').split('/').filter(Boolean)) {
-    path += '/' + seg;
-    state.treeClosed.delete('p:' + hostName + '|' + path);
-  }
-  saveSet('pbmockx-tree-closed', state.treeClosed);
-}
-
 function setAllTreeGroups(expand) {
   for (const h of buildTree(visibleFlows())) {
-    if (expand) state.treeClosed.delete(h.key);
-    else state.treeClosed.add(h.key);
+    if (expand) state.treeOpen.add(h.key);
+    else state.treeOpen.delete(h.key);
     const walk = (node) => {
       if (node.path) {
         const key = 'p:' + h.host + '|' + node.path;
-        if (expand) state.treeClosed.delete(key);
-        else state.treeClosed.add(key);
+        if (expand) state.treeOpen.add(key);
+        else state.treeOpen.delete(key);
       }
       for (const child of node.children.values()) walk(child);
     };
     walk(h.root);
   }
-  saveSet('pbmockx-tree-closed', state.treeClosed);
+  saveSet('pbmockx-tree-open-v2', state.treeOpen);
   renderFlows();
 }
 
@@ -471,7 +472,6 @@ function selectFlow(id) {
   state.tab = 'summary';
   state.original = false;
   state.bodyMode = 'decoded';
-  if (state.listMode === 'tree') ensureTreeVisible(state.flows.find((f) => f.id === id));
   renderFlows();
   updateHash();
   loadDetail(id);
@@ -877,7 +877,6 @@ function wire() {
     b.addEventListener('click', () => {
       state.listMode = b.dataset.mode === 'tree' ? 'tree' : 'flat';
       localStorage.setItem('pbmockx-list-mode', state.listMode);
-      if (state.listMode === 'tree') ensureTreeVisible(state.flows.find((f) => f.id === state.selectedId));
       renderFlows();
     });
   }
