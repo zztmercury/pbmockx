@@ -1,8 +1,0 @@
-# pbmockx plugin rules — auto-loaded when plugin initializes
-# Enables pipe: request tap-and-passthrough; response decode→patch→encode only when JSON/PB + mock rules
-* pipe://pbmockx
-# Long plugin protocol: makes whistle resolve this plugin for every request so the
-# rulesServer hook is consulted (whistle 2.10.x only calls it for requests that
-# match a plugin-protocol rule). Long protocol triggers the hook WITHOUT
-# forwarding/rewriting the request (short protocol would forward).
-* whistle.pbmockx://

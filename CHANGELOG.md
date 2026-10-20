@@ -5,6 +5,36 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.0] - 2026-10-20
+
+### 破坏性变更（重构）
+- **不再依赖 whistle**：移除了 `whistle.pbmockx` 插件、`w2` 进程管理、`pipe://pbmockx`、`rules.txt` 以及 `scripts/patch-whistle*` 补丁。pbmockx 现在是自带 MITM 代理 + Mock 引擎 + Web UI 的独立 Node.js 守护进程。
+- **进程管理**：`w2 start/stop/restart/status` → `pbmockx start/stop/restart/status`。`w2 ca` → `pbmockx ca`。端口默认仍为 `8899`（Android `adb reverse` / 系统代理配置无需修改）。
+- **证书**：改用 pbmockx 自己的根 CA（`~/.pbmockx/ca/ca.pem`）。旧 whistle CA 不再使用，所有设备需要重新信任新 CA。
+- **数据目录**：规则、mock 数据、desc 缓存移到 `~/.pbmockx/`（`rules.yaml`、`mock-data/`、`desc-cache/`）。首次在默认目录启动时会自动导入旧的 `whistle-plugin/rules.yaml` 与 `mock-data/`，不删除旧文件。
+- **内部 API**：`/plugin.pbmockx/cgi-bin/*` → `/__pbmockx/api/*`；保留 `/cgi-bin/rootca` 作为 CA 下载别名。CLI 已同步，外部脚本若直连旧 CGI 需要更新。
+- **暂不支持 HTTP/2 / gRPC**：MITM 的 ALPN 只提供 `http/1.1`（主流客户端会自动降级），上游统一使用 HTTP/1.1；纯 h2/gRPC 接口请用 bypass 原始隧道或后续版本。
+
+### 新增
+- **原生抓包**：HTTP/1.1 正向代理、HTTPS CONNECT 中间人、WebSocket 隧道、gzip/deflate/br、SSE 流式透传、大 body 背压转发；请求体旁路采样不阻塞转发。
+- **原生 Mock**：`patch`（含 `--append/--insert/--remove/--unset`、`google.protobuf.Any` 穿透）、`map_local(data|file)`、`map_remote`（含 regex，bare replacement 仍按 `https://` 处理）；`map_local` 的 `status`/`headers` 覆盖真正生效。
+- **局域网访问**：`pbmockx start --lan`（或 `--host 0.0.0.0`）后，同一 LAN 的设备可用代理并打开 Web UI/控制 API；`ui.lanAccess=false` 可只暴露代理（CA 下载仍可用），CA 下载端点对 LAN 开放。`pbmockx connect-android --wifi` 支持 Wi-Fi 设备直接指向本机 LAN IP。CLI 支持非 loopback 绑定（`resolveHost`）。start/status 会打印可用 LAN 地址。
+- **Web UI**（`http://127.0.0.1:8899/`）：实时 flow 列表（Flat/Tree 两种视图，Tree 按 host + 压缩路径树聚合、默认折叠）、可拖拽列表宽度、长 URL 自动换行、请求/响应详情、交互式 PB 字段树、mock 前/后切换、规则 CRUD 与启停、mock 数据编辑、CA 下载与各平台接入指引、SSE 实时更新、深浅色主题。
+- **新 CLI 命令**：`start`、`stop`、`restart`、`status`、`logs`、`ca`；`flows/decode/rules/map-local/map-remote/doctor/status` 支持 `--json`。
+- **安装脚本**：支持 `PBMOCKX_REF` / `--ref <branch>` 安装指定分支；代码安装到 `~/.pbmockx/app`、数据保留在 `~/.pbmockx`；自动替换旧 whistle 全局链接；`--uninstall [--purge]`。
+- **原生生命周期**：detached 守护进程、`runtime.json` + pid、日志文件、端口占用诊断、优雅退出、`pbmockx fix`（构建 + 重启 + 验证）。
+- **规则启停**：`rules.yaml` 新增可选 `enabled` 字段（默认 true），UI 可直接切换。
+
+### 保留
+- 全部既有 CLI 命令、参数、默认输出列、折叠式 `decode`、`--path/--full/--original` 语义。
+- `rules.yaml` 字段向后兼容（patch / map_local data|file / map_remote）。
+- PB 直接操作 message 对象（不转 JSON）、Any 展开/回包、int64/enum/bytes 类型标注、`patch_error` 记录。
+- `pbmockx agent-doc` / `skill install|list|uninstall` / `version [--check]` / `connect-android`。
+
+### 验证
+- 70 条自动化测试（node:test）：核心 PB/规则/字段树、CA/TLS、HTTP/HTTPS 抓包、gzip patch、map_local/map_remote、SSE、WebSocket、2MB 透传、HEAD/204、CLI 契约。
+- 手动：`curl --proxy` HTTP/HTTPS、Web UI、Android `adb reverse`（可选真机）。
+
 ## [0.6.9] - 2026-09-23
 
 ### 修复

@@ -1,9 +1,10 @@
-.venv/
-*.pyc
-__pycache__/
-rules.yaml
+node_modules/
+dist/
 *.log
-/tmp/
+rules.yaml
 mock-data/
-whistle-plugin/node_modules/
-whistle-plugin/dist/
+.dev-*/
+.npm-cache/
+.worktrees/
+coverage/
+tests/tmp/

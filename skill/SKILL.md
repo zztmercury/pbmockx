@@ -1,474 +1,253 @@
 ---
 name: pbmockx
 description: >
-  pbmockx helps you mock and inspect Protobuf/JSON API responses through whistle.
-  Use when you need to: mock data, change API response fields, view protobuf
-  responses, debug PB/JSON API calls, map local/remote, patch response fields.
+  pbmockx captures HTTP/HTTPS traffic and mocks protobuf/JSON API responses
+  with a native proxy and web UI. Use when you need to: mock data, change API
+  response fields, view protobuf responses, debug PB/JSON API calls, map local,
+  map remote, patch response fields, capture HTTP traffic.
   Triggers: 抓包, mock数据, 改接口返回, 看PB/JSON响应, map local, map remote,
-  patch, breakpoint, protobuf, 调试接口, pbmockx.
+  patch, protobuf, 调试接口, 代理, pbmockx.
 ---
 
 # pbmockx — Agent 指南
 
-pbmockx 是一个 **whistle 插件**，会自动识别每个抓包 HTTP 响应的协议（protobuf
-或 JSON）。**关键差异**：PB 响应**不会被转换成 JSON** —— 你在 whistle 的
-**PBView** sub-tab 看到的是结构化字段树（`name#N (type) = value` 格式，带
-类型标注），patch / map_local 等操作都直接作用于 message 对象本身。这避免了
-JSON 转换中的 int64→string / enum→string 歧义。
-
-进程拓扑：
+pbmockx 在本机运行一个**自带 MITM 代理 + Mock 引擎 + Web UI** 的守护进程，
+自动识别 Charles 风格的自描述 protobuf：
 
 ```
-w2（whistle CLI）  ──►  whistle 进程（含 pbmockx 插件）
-                          ├─ network: 抓包与查看（Request/Response 下的 PBView sub-tab）
-                          ├─ pipe://pbmockx: 请求透传记录；响应 JSON/PB + mock 规则时才解压 → 解码 → patch → 重新编码
-                          └─ CGI: /plugin.pbmockx/cgi-bin/...（CLI 走这条路）
+Content-Type: application/x-protobuf; desc="http://host/Model.desc"; messageType="pkg.Msg"; delimited=true
 ```
 
-- 进程管理用 `w2 start/stop/restart/status`（不是 `pbmockx start/stop`）。
-- PC 证书：`w2 ca`。Android：`pbmockx connect-android [-s <serial>]`。
-- CLI：`w2 exec pbmockx <cmd>`（推荐），或 `npm link` 后直接 `pbmockx <cmd>`。
-- 所有 CLI 命令最终都走插件的 CGI API：`/plugin.pbmockx/cgi-bin/...`。
-- **PBView 不是顶层 tab**：它是 Request 和 Response 区域下各自的 sub-tab
-  （通过 `whistleConfig.inspectorsTab.req/res` 注册，两个 tab 都叫 "PBView"，
-  分别对应 `pb-req.html` / `pb-res.html`）。在 Network 里点开请求后，切到
-  Request → PBView 看请求体字段树，切到 Response → PBView 看响应体字段树。
-- **每个 CLI 命令都支持 `-h` / `--help`**（如 `pbmockx decode -h`、
-  `pbmockx rules -h`）；主帮助：`pbmockx --help` 或 `pbmockx -h`。
+**关键差异**：PB 响应不会被转换成 JSON。字段树直接来自 protobufjs message 对象，
+显示为 `name#N (type) = value`（带字段号与类型），patch 也直接作用在 message 上。
+这避免了 int64→string、enum→string 的歧义。
+
+```
+client / Android / curl ──proxy──► pbmockxd (:8899)
+                                     ├─ 抓包（HTTP / HTTPS / WebSocket / SSE）
+                                     ├─ Mock（patch / map_local / map_remote）
+                                     ├─ 控制 API（CLI 使用）
+                                     └─ Web UI（给人看：http://127.0.0.1:8899/）
+```
+
+- 进程管理：`pbmockx start/stop/restart/status`（**不是** w2）。
+- PC/设备证书：`pbmockx ca`；Android：`pbmockx connect-android [-s <serial>]`。
+- CLI 默认折叠输出、省 token；读命令支持 `--json`；所有命令支持 `-h/--help`。
+- 规则持久化在 `~/.pbmockx/rules.yaml`，改完下一个请求立即生效（无需同步步骤）。
 
 ## 1. 前置检查 — 每次首先执行
 
-在做任何事之前，先运行 `pbmockx doctor`。它会检查整条链路：
-w2 / 插件 / 规则 / 流量。解读结果：
+```bash
+pbmockx doctor
+```
 
 | 结果 | 含义 | 操作 |
 |---|---|---|
-| w2: NOT running | whistle 未启动 | 运行 `w2 start`（后台 daemon，非阻塞）。 |
-| plugin: NOT loaded / NOT REACHABLE | 插件未注册或 npm link 失效 | 运行 `pbmockx fix`（自动 rebuild → npm link → w2 restart → verify）。若仍未恢复，检查 `npm ls -g whistle.pbmockx`，必要时重新跑 `./scripts/install.sh`。 |
-| plugin: OK, traffic: NO traffic | 插件已加载但没有流量 | 代理/证书未就绪 或 应用空闲。让用户操作应用（打开页面/搜索）触发流量，然后重新检查。如果应用有活动后流量仍为 0 → 证书或代理未就绪：PC 运行 `w2 ca` 安装 CA；Android 运行 `pbmockx connect-android`（配置代理 + 检测证书状态 `system`/`user`/`not_found`/`unknown`——系统证书可直接探测；**用户证书目录受 SELinux 保护，非 root 设备无法自动确认**，会返回 `unknown` 并引导手动到「设置 → 安全 → 加密与凭据 → 信任的凭据」核对。**不要假设证书未安装**）。 |
-| plugin: OK (flow_count=N>0) | 就绪 | 进入工作流 |
-| npm link: NOT LINKED | `pbmockx` 短命令不可用（插件本身可能正常） | 运行 `pbmockx fix` 重新 link；在修复前用 `w2 exec pbmockx <cmd>` 代替。 |
+| `daemon: FAIL` / `not running` | 代理守护进程没启动 | 运行 `pbmockx start`（后台 daemon，非阻塞）。 |
+| `daemon: OK, flows: 0` + `traffic: WARN` | 没有流量 | 检查客户端代理是否指向 `127.0.0.1:8899`；HTTPS 还要信任 CA（`pbmockx ca`）。让用户触发一次请求。 |
+| `CA: WARN` | CA 还没生成 | 运行一次 `pbmockx start` 或 `pbmockx ca`，然后按提示在各设备信任 CA。 |
+| `legacy whistle: WARN` | 机器上还装着 whistle | 与 pbmockx 无关；如果它占用 8899，先 `w2 stop` 或给 pbmockx 换端口。 |
+| `daemon: OK, flows: N>0` | 就绪 | 进入工作流。 |
 
-永远不要假设 whistle 已在运行 —— 必须先用 `doctor` 验证。
+**永远不要假设 daemon 在运行** —— 先用 `doctor` 验证。若 daemon 起不来：
+`pbmockx fix`（重新构建 + 重启 + 健康检查），失败时看 `pbmockx logs -n 50`。
 
-## 2. 标准工作流 — 按此顺序执行
+## 2. 标准工作流
 
-**第 1 步 — 找到目标 flow：**
-```
+### 第 1 步 — 找目标 flow
+
+```bash
 pbmockx flows
-```
-输出列：`id  method  status  protocol  messageType  url`。`id` 是 whistle
-session ID（如 `1784529570691-003`），**同一个 ID 同时持有 request 和 response
-数据**（v0.4.0 起合并了 REQ/RES 双 ID，每条请求一行，无 `dir` 列）。
-`protocol` 是 `protobuf` / `json`（空表示未识别），`messageType` 是响应的
-PB 全限定消息类型名。记下你要 mock 的 flow 的 `id`（接受前 8 位）。
-- 肉眼过滤：找到与你测试功能匹配的 URL 路径。
-- `protocol=protobuf` = PB 响应接口；`protocol=json` = JSON 响应。
-- `ERR:...`（decode 失败时 `protocol` 可能为空且 `decode <id>` 报错）—— 见故障排查。
-- 用 `--filter <regex>` 缩小范围：`pbmockx flows --filter api/game`
-- 也可直接在 whistle UI 里翻 Network（更直观）。
-
-**第 2 步 — 查看解码后的结构：**
-- **PB flow**：在 whistle UI 的 Network 里点开该请求，切到 **Response → PBView**
-  sub-tab（看响应）或 **Request → PBView** sub-tab（看请求体）。看到的是
-  结构化字段树，格式为 `name#N (type) = value`：
-  - `#N` 是 protobuf 字段编号（field id），不是数组下标。
-  - `(int64)` / `(enum Status)` / `(bytes, 12B)` / `(repeated Type)` 是类型标注。
-  - **未设置的字段**显示灰色 `(unset)`；repeated 字段未设置显示 `[]`。
-  - **默认折叠**，点击行首 `▸` 展开（展开后变 `▾`）。从这里抄出你要改的字段的 path。
-- **JSON flow**：PBView 会显示 `JSON — use the Body tab`，请在 whistle 原生
-  Body tab 查看 pretty-JSON。
-- 或 CLI：`pbmockx decode <id>` —— **默认折叠模式**（v0.4.0 起新默认，节省
-  token，适合 AI agent），同一个 ID 同时显示 Request 和 Response（不再需要
-  找匹配的 REQ/RES flow）：
-  - **顶层 scalar 字段**直接显示值；**嵌套 message** 显示 `(type, N fields) ▸`；
-    **repeated 字段** 显示 `(repeated type, N items) ▸`；**长字符串**截断到
-    80 字符加 `...`。
-  - `pbmockx decode <id>`：默认同时显示 Request 和 Response。
-  - `pbmockx decode <id> --req`：只显示 Request headers + body（同一 flow，
-    不是去找另一个 flow）。
-  - `pbmockx decode <id> --res`：只显示 Response headers + body。
-  - `pbmockx decode <id> --path 'list[0].app'`：导航到某个子树，显示该子树的
-    顶层（折叠）。路径含 `[0]` 时**务必加引号**（避免 shell glob 展开）。
-  - `pbmockx decode <id> --full`：完整展开所有层级（不截断，等同旧版默认行为）。
-  - `pbmockx decode <id> --original`：显示应用任何 patch 规则**之前**的原始数据
-    （可与 `--path` / `--full` 组合，如 `--original --path game`）。
-  - `--path` / `--full` 时默认**省略** method/url/headers（只输出 body，省 token）；
-    需要时加 `--headers` 找回。
-  - 输出格式：`=== Response ===` + 状态行 + headers + 空行 + `=== Response Body (PB: <type>) ===`
-    + `renderTree` 字段树（`name#N (type) = value`，与 PBView 同格式）。
-- **google.protobuf.Any 字段**：PBView / CLI 会基于 `type_url` 自动解码内层
-  message，显示为 `field#N (Any → actual.Type)`，嵌套字段直接展开在下面。
-  **不要修改 `@type` / `type_url`** —— 只改内层业务字段。
-
-**第 3 步 — 决定 mock 方式：**
-
-决策树（按优先级）：
-
-1. **知道要改哪个字段？** → **Patch 规则**（`rules add`）—— 推荐。
-   自动修改匹配的响应，不暂停、不超时。PB 和 JSON 都适用。
-2. **需要替换整个响应 body？** → **Map Local**（`map-local add`）。
-3. **需要把请求重定向到另一台服务器？** → **Map Remote**（`map-remote add`）。
-
-> ⚠️ v0.4.0 起**移除 breakpoint / intercept**（whistle 原生不支持，且容易
-> 导致客户端超时）。需要"运行时动态决定"的场景，改用 patch 规则配合
-> `pbmockx rules reload` 热更新。
-
-### 2.1 Patch — 按路径修改指定字段（推荐，不暂停、不超时）
-
-patch 通过 whistle 的 **pipe 机制**生效：插件加载时由 `whistle-plugin/rules.txt`
-自动注入 `* pipe://pbmockx` 全量规则。**请求体只记录、立刻转发，永不 mock。**
-响应仅当 Content-Type 为 JSON 或 protobuf、且该 URL 有 patch / map_local(data)
-规则时才缓冲：自动解压 gzip/deflate/br → 解码 → **展开 `google.protobuf.Any`**
-（按 `type_url` 解码 value bytes）→ 应用 patch（path 可穿透 Any）→ **回包 Any**
-→ 重新编码 → 返回**未压缩** body（whistle 处理 `content-encoding`）。
-其它响应（SSE、HTML、无 mock 规则）按 chunk 透传，不阻塞。**不暂停、不超时。**
-（如需选择性 pipe，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则覆盖。）
-
-> **patch 穿透 Any 的 path 示例**：`data.value.list[0].list[2].app.title` ——
-> 其中 `data` 是 `google.protobuf.Any` 字段，`value` 是 pipe hook 自动展开后的
-> 内层 message。你**不需要手动解码/编码 Any**，pipe hook 全程自动处理。
-> **不要修改 `@type` / `type_url`** —— 只改内层业务字段。
-
-**标准工作流（Agent 首选）：**
-```
-# 1. 先抓一个真实请求（或让用户触发一次）
-pbmockx flows --filter 'api/game'     # 找到已有 flow
-pbmockx decode <id>                    # 查看字段树，拿到 path
-
-# 2. 添加持久规则（pipe 规则由 rules.txt 自动注入，无需手写）
-pbmockx rules add 'api/game' game.name 'MockedGame'
-pbmockx rules add 'api/game' game.id 999
-
-# 3. 用户重新触发请求 → 响应自动修改 → 客户端收到 mock 数据
-#    不暂停、不超时 ✅
-
-# 4. 验证
-pbmockx flows --filter 'api/game'              # 抓到新 flow
-pbmockx decode <new_id> --path game             # 折叠显示 game 子树（看到 name=MockedGame）
-pbmockx decode <new_id> --original --path game  # patch 前: name=TapTap（对比）
+pbmockx flows --filter 'api/game'
+pbmockx flows --json          # 机器可读
 ```
 
-- **PB 和 JSON 行为完全一致** —— 都解码为 message/dict，按 path patch，
-  再重新编码。区别只是 PB 的字段树有类型标注。
-- `--protocol pb|json` 可选过滤（省略 = 同时应用两者）。
-- 规则自动保存到 `rules.yaml`（重启后依然存在）。
-- **pipe 规则由 `rules.txt` 自动注入** —— 只加 `rules add` 即可生效，
-  无需在 whistle UI 里手写 `pipe://pbmockx` 规则。
+输出列：`id method status proto url`。同一 `id` 同时持有 request 和 response
+（一条请求一行，没有 dir 列）。`proto` 是 `protobuf`/`json`（或 `req/res` 组合）。
+`id` 形如 `1784529570691-003`，可以只取前 8 位。
 
-#### 2.1.1 Repeated 字段的新增/删除/插入
+### 第 2 步 — 查看解码结构
 
-patch 规则默认（不带 action flag）是**整体替换**字段值。对 repeated
-（列表）字段，可以用 action flag 做**条目级**操作：
-
-```
-# 追加一条到列表末尾
-pbmockx rules add '<url_regex>' 'items' --append '{"id":9,"name":"New"}'
-
-# 插入到指定索引（插到 items[1] 前面，原 [1] 及之后整体后移）
-pbmockx rules add '<url_regex>' 'items' --insert 1 '{"id":8}'
-
-# 删除指定索引的条目
-pbmockx rules add '<url_regex>' 'items' --remove 0
+```bash
+pbmockx decode <id>                          # Request + Response（默认折叠）
+pbmockx decode <id> --req                    # 只看请求
+pbmockx decode <id> --res                    # 只看响应
+pbmockx decode <id> --path 'data.list[0]'    # 导航到子树（路径含 [n] 要加引号）
+pbmockx decode <id> --full                   # 完整展开（不截断）
+pbmockx decode <id> --original               # patch 前的原始响应
+pbmockx decode <id> --original --path game   # 组合使用
+pbmockx decode <id> --json                   # 原始 API detail（含字段树 JSON）
 ```
 
-- `--append` / `--insert` / `--remove` 三者互斥；不带任一 flag 时保持
-  原有整体替换语义（向后兼容）。`--unset` 是另一个 action flag（见 §2.1.2）。
-- `--append <value>` / `--insert <idx> <value>` 的 `<value>` 会先按 JSON
-  解析（同普通 patch）。对 PB 的 message 列表，传一个 JSON 对象即可，
-  编码时 protobufjs 会自动把它转成对应 message（enum 可传数字或名字、
-  bytes 传 base64、int64 传数字）。
-- `--remove <idx>` 不需要 value，索引越界会在该次响应抛出 patch_error。
-- path 直接指向 repeated 字段本身（如 `items`、`game.tags`），**不要**带
-  `[n]` 索引 —— 索引由 `--insert`/`--remove` 的 `<idx>` 提供。想改列表中
-  某个已有条目的内部字段（如 `items[0].name`），仍用普通 set patch：
-  `pbmockx rules add '<url>' 'items[0].name' 'NewName'`。
+- 默认折叠：顶层 scalar 显示值；嵌套 message 显示 `(type, N fields)`；
+  repeated 显示 `(repeated type, N items)`；长字符串截断到 80 字符。
+- `--path`/`--full` 默认省略 method/url/headers（省 token）；加 `--headers` 找回。
+- 字段树格式：`name#N (type) = value`。`#N` 是 **proto 字段号**，不是数组下标。
+  enum 显示 `数字 (名字)`；bytes 显示 base64 截断 + 字节数；未设置显示 `(unset)`。
+- `google.protobuf.Any` 显示 `name#N (Any → actual.Type)`，内层字段自动展开。
+  **不要修改 `@type`/`type_url`**，只改内层业务字段。
+- 人看 UI 更直观：`pbmockx web` 或 `http://127.0.0.1:8899/`，点 flow → 字段树，可展开任意层级。
 
-#### 2.1.2 Patch action `unset` — 删除字段
+### 第 3 步 — 选择 mock 方式
 
-`unset` 是 `set`（缺省）之外的另一种 patch action：在 `path` 处**删除键**，
-让该键从响应 body 中消失。
+优先级：
 
+1. **只改几个字段** → **patch**（`rules add`），推荐；不暂停、不超时。
+2. **整体替换 response body** → **map local**（`map-local add`）。
+3. **把请求转到另一台服务器** → **map remote**（`map-remote add`）。
+
+> 没有 breakpoint/intercept。需要“运行时动态决定”时，用 patch + `pbmockx rules reload` 热更新。
+
+## 3. Mock 规则
+
+### 3.1 Patch — 按 path 改字段
+
+```bash
+pbmockx rules add '<url_regex>' <path> <value> [--protocol pb|json]
+pbmockx rules add '<url_regex>' <path> --append <value>       # repeated 末尾追加
+pbmockx rules add '<url_regex>' <path> --insert <idx> <value> # 插入到 index 前
+pbmockx rules add '<url_regex>' <path> --remove <idx>         # 删除 index
+pbmockx rules add '<url_regex>' <path> --unset                # 删除键
+pbmockx rules list [--type patch|map_local|map_remote] [--json]
+pbmockx rules del <id>
+pbmockx rules save      # 手动写回 rules.yaml（add/del 已自动保存）
+pbmockx rules reload    # 手动改过 rules.yaml 后重载
 ```
-# 删除 game.name 字段（body 里不再有该键）
-pbmockx rules add '<url_regex>' 'game.name' --unset
+
+- `url` 是正则，对**完整 URL** 做 `RegExp.test`；非法正则回退子串匹配。
+- `value` 先按 JSON 解析：`999` / `true` / `false` / `null` / `'{"k":"v"}'` / `'[1,2]'`；
+  解析失败按字符串。
+- `false` 与 `null` 会真实写入 body 并持久化（`0`/`''`/对象/数组同样）。
+  **删除键用 `--unset`**：`null` = 键存在值为 null，`unset` = 键不存在。
+- repeated 的条目级操作：`--append`/`--insert`/`--remove` 互斥；path 指向 repeated 字段本身
+  （`items`，不要带 `[n]`），索引由 flag 提供。想改已有条目内部字段仍用普通 set：
+  `rules add url 'items[0].name' NewName`。
+- 规则按存储顺序执行；同 `url_pattern + type`（patch 还比 path）会替换旧规则。
+
+**标准验证流程：**
+
+```bash
+pbmockx rules add 'api/game' game.name Mocked
+# 让用户重新触发请求（旧 flow 不会被回改）
+pbmockx flows --filter 'api/game'
+pbmockx decode <new_id> --path game            # name=Mocked
+pbmockx decode <new_id> --original --path game # patch 前
 ```
 
-- 持久化到 `rules.yaml` 为 `action: unset`；`rules list` 该行 value 列显示
-  `(unset)`。
-- **`null` 与 `unset` 语义严格区分**：`null` 表示**键存在、值为 `null`**，
-  `unset` 表示**键不存在**。要移除键，请用 `unset`。
-- 不含 `value`、不含 `action` 的存量规则行为与之前一致。
+### 3.2 Map Local — 整 body 替换
 
-### 2.2 Map Local — 替换整个响应 body
+```bash
+# dict 模式：JSON 自动编码为 PB（PB 响应需要 desc/messageType）
+pbmockx map-local add '<url_regex>' --data '{"game":{"name":"Mocked"}}' \
+  [--desc <url>] [--messageType <type>] [--delimited] [--status 200]
 
-两种模式：
+# file 模式：本地文件原始字节直接作为响应
+pbmockx map-local add '<url_regex>' --file /path/to/mock.pb [--status 200]
 
-**Dict 模式（PB 增强，推荐用于 PB）：**
-```
-pbmockx map-local add '<url_regex>' --data '<json>'
-  [--desc <url>] [--messageType <type>] [--delimited]
-```
-- 提供一个 JSON dict，pbmockx 用响应的 `desc` / `messageType`
-  自动编码为 PB。
-- 如果该 URL 之前被抓过，`desc` / `messageType` 从 flow_store 自动检测；
-  否则必须显式提供 `--desc <url>` 和 `--messageType <type>`。
-- `--delimited` 用于 multi-message PB 响应（编码为 JSON 数组）。
-- dict 数据**保存到外部文件** `mock-data/<id>.json`（不在 rules.yaml 内），
-  rules.yaml 只保存引用 `data_file: <id>.json`。
-
-**File 模式（whistle 原生）：**
-```
-pbmockx map-local add '<url_regex>' --file <file_path>
-```
-- 使用 whistle 原生 `file://` 规则 —— 本地文件的原始字节直接成为响应 body。
-- 规则由插件 rulesServer 每请求动态生成（whistle 自动触发，无需配置）；
-  改完规则下一个请求即生效，不需要任何同步操作。
-- 不会经过 PB 编码，适合你已经有现成 .pb / .json 文件的场景。
-
-**管理：**
-```
 pbmockx map-local list
 pbmockx map-local del <id>
 ```
 
-### 2.3 Map Remote — 将请求重定向到另一个 URL（whistle 原生）
-```
-pbmockx map-local add '<url_regex>' <replacement> [--regex]
+- dict 数据保存在 `~/.pbmockx/mock-data/<id>.json`，rules.yaml 只存 `data_file`。
+- 若规则没写 `desc`/`messageType`，会从该响应的 Content-Type 继承；
+  响应本身也没有 PB 元数据时按 JSON 序列化兜底。
+- `--status`/规则里的 `headers` 会覆盖响应状态与头。
+- file 模式按扩展名推断 content-type（`.json`→json，`.pb/.bin`→protobuf/octet-stream）。
+
+### 3.3 Map Remote — 请求重定向
+
+```bash
+pbmockx map-remote add '<url_regex>' '<replacement>' [--regex]
 pbmockx map-remote list
 pbmockx map-remote del <id>
 ```
-- 使用 whistle 原生 `https://` 规则 —— 匹配的请求被重定向到 `<replacement>`。
-- 规则由插件 rulesServer 每请求动态生成（与 map-local file 同一机制）。
-- 整体 URL 模式：`<url_regex> → https://new.example.com/new`。
-- 正则模式（`--regex`）：`re.sub(url_regex, replacement, url)` —— 灵活的部分替换。
-- 适用于把测试环境请求指向 mock 服务器。
 
-**第 4 步 — 执行：**
-- **Patch 规则（推荐 —— 不暂停、不超时）：**
-  ```
-  # 1. 添加持久规则（pipe 规则由 rules.txt 自动注入，无需手写）
-  pbmockx rules add '<url_regex>' <path> <value> [--protocol pb|json]
-  # 2. 用户重新触发 → 响应自动修改 → 客户端收到 mock 数据
-  ```
-- Map Local：见 §2.2
-- Map Remote：见 §2.3
+- 非 regex：`replacement` 是完整目标 URL；**不带 scheme 时按 `https://` 处理**（兼容旧规则）。
+- `--regex`：`url.replace(new RegExp(url_pattern), replacement)`（部分替换，`$1` 可用）。
+- 例：`pbmockx map-remote add 'pub\.xdrnd\.cn/api/x' '127.0.0.1:9101/api/x'`
+  → 请求发到 `https://127.0.0.1:9101/api/x`，Host/SNI 同步改写。
+- 指向 loopback/私网的 HTTPS 目标会自动跳过上游证书校验（方便本地 mock server）。
 
-**第 5 步 — 验证：**
+### 3.4 执行顺序
+
 ```
-pbmockx decode <id>              # 显示（mock 后的）字段树 / JSON
-pbmockx decode <id> --original   # 显示原始（mock 前）数据用于对比
-pbmockx rules list               # 确认规则生效
-pbmockx rules list --type patch  # 按类型过滤
-pbmockx rules list --type map_local
+map_remote(请求阶段) → map_local(file)(请求阶段) → map_local(data)(响应阶段) → patch(响应阶段)
 ```
-或让用户检查应用界面 / whistle Network 的 PBView sub-tab。
 
-## 3. 命令参考
+请求阶段规则先决定目标/本地响应；响应阶段规则只在响应是 JSON/PB 且非 SSE 时执行。
+`map_local(file)` 命中时不会访问上游；`map_remote` 改写的目标仍会抓包记录。
+
+## 4. 命令参考
 
 ### 进程与连接
+
+```bash
+pbmockx start [--port 8899] [--host 127.0.0.1] [--lan] [--foreground]
+pbmockx stop | restart | status [--json]
+pbmockx logs [-f] [-n 100]
+pbmockx web                                   # 打开 Web UI
+pbmockx ca [--out <file>] [--info] [--regen --yes]
+pbmockx connect-android [-s <serial>] [--wifi [host]]
 ```
-w2 start / stop / restart / status    # whistle 进程管理（不是 pbmockx start/stop）
-w2 ca                                 # 安装 PC 根证书（打开证书页面）
-pbmockx connect-android [-s <serial>] # 配置 Android 代理 + 检测证书状态（adb reverse + http_proxy + cert 检测：system/user/not_found/unknown；用户证书目录受 SELinux 保护，非 root 设备无法自动确认 → unknown，需手动到设置核对）
-pbmockx web                           # 打开 whistle Web UI
-```
+
+- 默认监听 `127.0.0.1:8899`。局域网设备（手机/另一台电脑）要用时：`pbmockx start --lan`（或 `--host 0.0.0.0`）。启动输出会打印 LAN IP；代理和 UI 都用 `http://<LAN-IP>:8899`。
+- 只想暴露代理、不暴露 UI/API：`~/.pbmockx/config.json` 设 `{"ui":{"lanAccess":false}}`（CA 下载端点仍可用）。
+- 端口占用时用 `PBMOCKX_PORT=8900 pbmockx start`；CLI 后续命令会自动从 `runtime.json` 找到端口。
+- Android USB：`connect-android` 执行 `adb reverse tcp:8899 tcp:8899` + `settings put global http_proxy 127.0.0.1:8899`。Android Wi-Fi：先 `pbmockx start --lan`，再 `pbmockx connect-android --wifi`（自动取本机 LAN IP）。证书状态检测：system/user/not_found/unknown；非 root 设备用户证书目录受 SELinux 保护，通常 unknown，需要手动核对。
 
 ### 抓包与查看
-```
-pbmockx flows [--filter <regex>]                            # 列出 flow：id method status protocol messageType url
-pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full] [--headers]
-                                                            # 默认折叠模式（节省 token，适合 AI agent）
-                                                            #   --req/--res     只看 Request 或 Response（同一 flow，不是找另一个 flow）
-                                                            #   --original      patch 前原始数据（可与 --path/--full 组合）
-                                                            #   --path <path>   导航到子树（折叠显示），路径含 [n] 需加引号
-                                                            #   --full          完整展开所有层级（不截断，旧版默认）
-                                                            #   --headers       带 --path/--full 时仍显示 method/url/headers（默认省略，省 token）
-```
-> - **PB flow**：在 whistle UI 的 Network 里点开请求，切到 **Response → PBView**
->   sub-tab（响应）或 **Request → PBView** sub-tab（请求体）查看结构化字段树
->   （`name#N (type) = value`，未设置字段显示 `(unset)`，默认折叠点击 `▸` 展开）。
->   比 CLI 更直观，且支持点击展开任意层级。
-> - **JSON flow**：PBView 显示 `JSON — use the Body tab`，请用 whistle 原生
->   Body tab 查看。CLI `decode <id>` 对 JSON flow 直接输出 pretty-JSON。
-> - **默认折叠模式**（v0.4.0 新默认）：顶层 scalar 显示值，嵌套 message 显示
->   `(type, N fields) ▸`，repeated 显示 `(repeated type, N items) ▸`，长字符串
->   截断到 80 字符加 `...`。适合 AI agent 节省 token —— 用 `--path 'x.y[0].z'`
->   钻入子树看局部细节，用 `--full` 全展开。
-> - `decode <id>` 同一 ID 同时显示 Request 和 Response（v0.4.0 合并了 REQ/RES
->   双 ID，flows 列表无 `dir` 列）；`--req` / `--res` 只显示对应部分。
-> - `decode <id> --original` 显示 patch 前的原始数据（与 patch 后对比验证）。
-> - 所有子命令都有 `-h` / `--help`（例如 `pbmockx flows -h`、`pbmockx decode -h`）。
 
-### 规则 — patch 类型（持久化、按路径）
-```
-pbmockx rules add <url_regex> <path> <value> [--protocol pb|json]
-pbmockx rules add <url_regex> <path> --append <value>
-pbmockx rules add <url_regex> <path> --insert <idx> <value>
-pbmockx rules add <url_regex> <path> --remove <idx>
-pbmockx rules add <url_regex> <path> --unset
-pbmockx rules list [--type patch|map_local|map_remote]
-pbmockx rules del <id>
-pbmockx rules save                    # 手动写回 rules.yaml
-pbmockx rules reload                  # 从 rules.yaml 重新加载
-```
-
-### Map Local（body 替换）
-```
-pbmockx map-local add <url_regex> --data '<json>' [--desc <url>] [--messageType <type>] [--delimited]
-pbmockx map-local add <url_regex> --file <file_path>    # whistle 原生 file://
-pbmockx map-local list
-pbmockx map-local del <id>
-```
-
-### Map Remote（请求重定向，whistle 原生 https://）
-```
-pbmockx map-remote add <url_regex> <replacement> [--regex]
-pbmockx map-remote list
-pbmockx map-remote del <id>
+```bash
+pbmockx flows [--filter <regex>] [--json]
+pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full] [--headers] [--json]
 ```
 
 ### 工具维护
+
+```bash
+pbmockx doctor [--json]      # Node / 数据目录 / CA / daemon / 规则 / 流量
+pbmockx fix                  # 构建 + 重启 + 验证
+pbmockx agent-doc            # 打印本指南
+pbmockx skill install|list|uninstall
+pbmockx version [--check]
 ```
-pbmockx doctor                        # 全链路健康检查（w2 + 插件 + npm link + 规则 + 流量）
-pbmockx fix                           # 自动修复：总是 rebuild（tsc）→ npm link → w2 restart → verify
-pbmockx agent-doc                     # 打印本指南
-pbmockx skill install                 # 安装到 agent skill 目录（~/.agents/skills/ + ~/.claude/skills/）
-pbmockx version [--check]             # 显示版本；--check 查询 GitHub 最新版
-```
 
-## 4. path 与 value 语法
-- **path**：用点号表示嵌套字段，用 `[n]` 表示列表索引。
-  `game.name` · `items[0].id` · `data.list[0].list[0].brand.app.title`
-- **value**：会先尝试按 JSON 解析 —— `int`（`100`）、`bool`（`true`/`false`）、
-  `null`、对象（`{"k":"v"}`）、数组（`[1,2]`）。否则当作字符串处理。
-  在 shell 中，字符串需加引号：`"hello"`。对象/数组用单引号包裹
-  JSON：`'{"k":"v"}'`。
-  - `false` 与 `null` 都会**真实写入 body 并持久化到 rules.yaml**（序列化时
-    只过滤 `undefined`）：`false` = 键存在且值为 `false`，`null` = 键存在且值为
-    `null`。`0` / `''` / 对象 / 数组同样正常。
-  - 想表达「**键不存在**」（删除该键）请用 `--unset`（见 §2.1.2），不要用
-    `null` —— `null` 是「键在、值为 null」，`unset` 是「键被删除」，语义不同。
-- **删除字段**：`--unset` 删除 `path` 对应的键（键从 body 中消失），是
-  `set` 之外的另一种 patch action（见 §2.1.2）。
-- **repeated 字段条目操作**：`--append <value>` 追加、`--insert <idx> <value>`
-  插入、`--remove <idx>` 删除；不带这些 flag 时 `rules add <path> <value>`
-  为整体替换（见 §2.1.1）。
-- **`rules add` 参数解析**：负数（如 `-1`）会被当作 value（不再被误判成
-  flag）；set / append 缺 value、或出现未知 `--flag` 都会报错并以退出码 1
-  结束。已知 flag：`--protocol <v>`、`--append <value>`、
-  `--insert <idx> <value>`、`--remove <idx>`、`--unset`。
-- path **区分大小写** —— proto 字段名是 snake_case（不是 camelCase）。
+## 5. Path 与 value 语法
 
-### ⚠️ PB 类型陷阱 —— v0.4.0 与旧版的关键差异
+- **path**：点号嵌套，`[n]` 列表索引：`game.name`、`items[0].id`、
+  `data.value.list[0].app.title`（`data` 是 Any 时自动穿透）。区分大小写，
+  proto 字段名是 snake_case。
+- **value**：先 JSON 解析，再字符串兜底；shell 中对象/数组用单引号包 JSON。
+- PB 类型：
+  - **int64/uint64**：传数字（`123`）；非数字字符串会 encode 失败。
+  - **enum**：传数字最稳（也接受名字字符串）。
+  - **bytes**：传合法 base64 字符串。
+  - **未设置字段**：patch scalar 会创建它；patch message 字段需要先有值。
+- 加规则后检查 `patch_error`：`decode` 输出末尾或 `--json` 的 `patchError` 字段。
+  例如 int 字段传了 `sku1` 会报编码错误。
 
-**v0.4.0 起，PB 数据不再被转换为 JSON** —— patch / map_local 直接作用于
-protobufjs 的 message 对象（`decodeDelimited` → `set_by_path` →
-`encodeDelimited`，**不经过 JSON 中转**），所以字段树展示与 patch 行为是
-一致的：
+## 6. 故障排查
 
-- **int64/uint64 字段**：显示为 **数字**（不是字符串），带 `(int64)` 标注。
-  - protobufjs 默认把 int64 当 JS `number`，超过 `Number.MAX_SAFE_INTEGER`
-    才退化为 `Long.toString()` 字符串。
-  - patch 时**传数字**：`pbmockx rules add url field 123`（不是 `"123"`）。
-    字符串数字 `"123"` 经 `fromObject` 也会被强转为 number，但**非数字字符串
-    如 `"sku1"` 仍会编码失败**。
-- **enum 字段**：显示为 **数字 + 名字标注**，格式 `name#N (enum Status) = 1 (STATUS_ACTIVE)`。
-  patch 时传**数字值**最稳妥（`fromObject` 也接受名字字符串，但传数字避免歧义）。
-- **bytes 字段**：显示为 **base64 字符串**，带 `(bytes, NB)` 标注（B = 字节数）。
-  patch 时传**合法的 base64 字符串**（不能用裸 bytes / number）。
-- **google.protobuf.Any**：PBView / CLI 基于 `type_url` 自动解码内层 message，
-  显示为 `name#N (Any → actual.Type)`，嵌套字段直接展开。**不要修改
-  `@type` / `type_url`** —— 只修改其中嵌套的业务字段。
-- **未设置的字段**：PBView 灰色显示 `(unset)`；CLI 显示 `name#N (type) (unset)`。
-  patch 一个未设置的 scalar 字段会创建它；patch 一个 message 字段需要先有值。
-- **务必检查 `patch_error`**：添加 patch 规则后，`decode <id>` 输出会带
-  `patch_error`（如果编码失败，如类型不匹配）。修正值的类型后重试。
-  示例：`patch_error: ... invalid literal for int() with base 10: 'sku1'`
-  → 该字段是 int，你传了非数字字符串。
+| 现象 | 排查/处理 |
+|---|---|
+| `flows` 一直为空 | `pbmockx doctor`；确认客户端代理指向 `127.0.0.1:8899`；HTTPS 要信任 CA（`pbmockx ca` 看说明，Android 用 `connect-android`）。 |
+| HTTPS 请求报证书错误 | 客户端没信任 pbmockx CA。下载 `http://127.0.0.1:8899/__pbmockx/api/ca.pem` 并安装；Android 7+ 需系统证书或 networkSecurityConfig。 |
+| patch 不生效 | 检查 `url_pattern` 是否匹配完整 URL（`pbmockx flows` 里的 `url`）；确认响应 `proto` 是 protobuf/json（非 SSE/HTML）；规则是否被 `enabled:false` 关闭（UI 可看）；`pbmockx rules list`。 |
+| `decode` 报 `Couldn't find message X` | `.desc` 缺少依赖或 `messageType` 写错；检查响应 Content-Type 的 `desc`/`messageType`。 |
+| `patch_error` / 编码失败 | value 类型不匹配（int64 传了非数字、bytes 不是 base64、enum 名字不存在）。改成正确类型后重试。 |
+| map_local(data) 失败 | 该响应 Content-Type 没有 `desc`/`messageType`；给规则显式加 `--desc`/`--messageType`。 |
+| 大响应 body 变短 | 超过 `maxRecordBodyBytes` 会被记录截断（详情会提示 truncated），但客户端收到的字节不受影响；改写超过 `maxRewriteBodyBytes` 会放弃 mock 并透传。 |
+| 请求一直卡住 | 见 `pbmockx logs -n 100`；确认上游可达；h2-only/gRPC 接口不支持（用 bypass 原始隧道）。 |
+| 规则未持久化 | `rules add/del` 自动保存；手动改文件后 `pbmockx rules reload`；`pbmockx rules list` 核对。 |
+| daemon 起不来 | `pbmockx fix`；仍失败看 `pbmockx logs -n 50`；端口冲突换 `PBMOCKX_PORT`。 |
+| 局域网设备连不上 | 确认 daemon 以 `--lan` / `--host 0.0.0.0` 启动（`pbmockx status` 会显示 LAN 地址）；设备代理填 LAN IP:8899 而不是 127.0.0.1；HTTPS 需装 CA；macOS 防火墙需允许 node 入站。UI 打不开时检查 `ui.lanAccess` 是否为 false。 |
 
-> 对比旧版（v0.3.0 mitmproxy，已删除）：PB 解码为 JSON 时 int64 会变成字符串、enum
-> 会变成字符串名，存在歧义。v0.4.0 通过不转 JSON 直接消除了这些问题。
+## 7. 备注与限制
 
-### pipe 规则（patch 生效的前提）
-patch 规则只有在匹配请求经过 `pipe://pbmockx` 时才会执行。**插件加载时由
-`whistle-plugin/rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，默认所有请求
-都走 pipe，无需用户手动配置。** 如需选择性 pipe，可在 whistle UI 的 Rules 里加
-更具体的规则覆盖：
-```
-pattern: api/game      （比 * 更具体，只 pipe 匹配的请求）
-operator: pipe://pbmockx
-```
-匹配的请求进入 pipe。请求体只记录、立刻转发。响应仅 JSON/PB 且有 mock 规则时
-才走「自动解压 gzip/deflate/br → decode → **展开 Any** → patch → **回包 Any**
-→ encode」，返回**未压缩** body —— whistle 会剥除 `content-encoding`。
-其它响应按 chunk 透传。
-
-## 5. 故障排查
-- **`pbmockx doctor` 报 `w2: NOT running`**：运行 `w2 start`。若 `w2` 命令
-  不存在 → 安装 whistle：`npm i -g whistle`。
-- **`pbmockx doctor` 报 `plugin: NOT loaded` / `NOT REACHABLE` 或
-  `npm link: NOT LINKED`**：插件未注册或 npm link 失效。直接运行
-  `pbmockx fix`（自动 rebuild → npm link → w2 restart → verify health）。
-  若仍未恢复，重新跑 `./scripts/install.sh`；修复前可用 `w2 exec pbmockx <cmd>`
-  作为替代调用。
-- **`flows` 一直为空 / `flow_count=0`**：见前置检查 —— 证书/代理/应用空闲。
-  PC: `w2 ca` 安装证书；Android: `pbmockx connect-android`（配置代理 + 检测证书状态——**不要假设证书未安装**，运行此命令查看实际状态：system/user/not_found/unknown；user 表示已装为用户证书但 Android 7+ app 默认不信任，需 root/Magisk 装系统证书或 app 配 networkSecurityConfig；unknown 表示无法自动确认——非 root 设备用户证书目录受 SELinux 保护读不到，需到「设置 → 安全 → 加密与凭据 → 信任的凭据」手动核对）。
-- **patch 规则不生效**：默认 `* pipe://pbmockx` 由 `rules.txt` 自动注入，
-  无需手写 pipe 规则。如果你在 whistle UI 里改过 Rules（覆盖了 `*` 规则），
-  确认对应 pattern 仍指向 `pipe://pbmockx`（§4 末尾）。同时检查 `url_regex`
-  是否真的匹配请求 URL。若插件被 Web UI 卸载或 npm link 失效，运行
-  `pbmockx fix`（rebuild → npm link → w2 restart → verify）一键修复。
-- **patch 穿透 Any 时报 `path not found`**：pipe hook 会自动展开
-  `google.protobuf.Any` 字段（按 `type_url` 解码 value bytes），patch 的 path
-  可直接导航到展开后的内层 message 字段（如 `data.value.list[0].app.title`，
-  `data` 是 Any，`value` 是内层 message）。确认 `type_url` 在 `.desc` 里能找到
-  对应类型，否则无法展开。**不要修改 `@type` / `type_url`**。
-- **`decode` 返回 `error: "Couldn't find message X"`**：.desc 已加载但
-  message X 的文件添加失败（缺少 google well-known 依赖）—— 这是
-  插件 bug，请上报。或 `desc` URL 不可达 / `messageType` 错误：检查
-  decode 输出中的 `content_type` 和 `desc` 字段。
-- **`decode` 返回其他 `error`**：响应未被识别为 PB/JSON，或
-  body 格式错误。检查 `content_type` —— PB 应为 `application/x-protobuf`
-  或 JSON 应包含 `json`。
-- **mock 没送达客户端**：v0.4.0 没有 breakpoint/intercept ——
-  持续规则（patch + map_local）只对**添加规则之后**的新匹配响应生效。
-  让用户重新触发请求即可。已经返回的旧 flow 不会被回改。
-- **字段 path 错误 / IndexError**：重新运行 `decode <id>` 或看 whistle
-  PBView sub-tab，从字段树里复制确切的 path。path 区分大小写。
-- **mock 返回 400 "path not found"**：该 path 在解码数据中不存在。
-  响应会带一个 `hint` 显示实际数据结构 —— 从中复制正确的 path。
-- **map-local `--data` 模式失败**：编码 PB 需要 `desc` + `messageType`。
-  如果该 URL 之前被抓过，会从 flow_store 自动检测。否则显式提供
-  `--desc <url>` 和 `--messageType <name>`。
-- **规则未持久化**：`rules add` 会自动保存到 rules.yaml。如果保存失败
-  （权限/磁盘），手动运行 `pbmockx rules save`。用 `pbmockx rules list` 检查。
-- **map_local data 文件丢失**：dict 模式数据存在 `mock-data/<id>.json`
-  外部文件（不在 rules.yaml 内）。如果该文件被删，规则会失效 —— 重新
-  `map-local add --data` 即可。
-- **map-local `--file` / map-remote 不生效**：规则由插件 rulesServer 动态生成，
-  触发条件是 whistle 已加载插件规则文件里的 `* whistle.pbmockx://`
-  （`whistle-plugin/rules.txt`，随插件自动注入）。排查：① `pbmockx rules list`
-  确认规则在 `rules.yaml`；② `pbmockx rules reload` 后重试；③ 重启 whistle
-  （`w2 restart`）让插件重新加载 rules.txt。
-- **大响应偶发被截断**（body 比预期短但 HTTP 200）：whistle pipe 半关闭竞态，
-  已由 `pbmockx fix`（`scripts/patch-whistle-pipe.js`）修复——大响应透传实测
-  1.4MB/3.5MB/11.5MB 全量字节一致。若仍复现：先跑 `pbmockx fix` 重打补丁并
-  `w2 restart`；临时规避 `<url> ignore://pipe`（代价：该 URL 不再记录 flow）。
-  PB/JSON 小响应不受影响。
-
-## 6. 备注
-- 所有 CLI 命令通过插件 CGI API：
-  `http://127.0.0.1:<whistle_port>/plugin.pbmockx/cgi-bin/...`。
-  端口跟随 whistle 配置（默认 `http://127.0.0.1:8899`）。
-- 持续规则在抓包时生效；`decode` 显示（可能已 mock 的）
-  解码数据。用 `--original` 查看 mock 前的数据。
-- PB `delimited=true` 响应解码为字段树数组；用 `[n]` 索引访问。
-- flow_store 有 LRU 上限；满后淘汰最旧的。
-- 所有规则类型（patch / map_local / map_remote）共用同一个 rules.yaml
-  并可共存。每个匹配请求的执行顺序：
-  map_remote(request，whistle 原生) → map_local(response，file 走原生 /
-  data 走 pbmockx 编码) → patch(response，需 pipe://pbmockx)。
-- 规则 ID 为 `crypto.randomBytes(4).toString('hex')`（8 字符 hex）。`rules.yaml` 启动时自动加载，add/del 时自动保存
-  （保存时保留头部 `#` 注释和空行）。`rules.yaml` 被 `.gitignore` 排除
-  （运行时生成），仓库内有 `rules.yaml.example` 作为模板。
+- 支持 HTTP/1.1 代理、HTTPS CONNECT MITM、gzip/deflate/br、SSE、WebSocket 隧道。
+- **不支持 HTTP/2 / gRPC**（MITM 只提供 `http/1.1`，上游统一 h1）；纯 h2/gRPC 请加到 `proxy.bypass` 走原始隧道。
+- 无 breakpoint/intercept；所有修改用持续规则。
+- flow 存在内存（LRU + 总字节上限），重启后清空。
+- 规则、mock 数据、CA、日志都在 `~/.pbmockx/`（`PBMOCKX_DATA_DIR` 可覆盖）。
+- 规则 ID 是 8 位 hex；`rules.yaml` 与旧 whistle 插件格式兼容（新增可选 `enabled`）。
+- 给人看的 UI：`pbmockx web`；给 agent 的机器输出：`--json`。

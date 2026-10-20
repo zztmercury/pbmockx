@@ -1,152 +1,225 @@
 # pbmockx
 
-whistle 插件，抓包查看/修改 **protobuf + JSON** 数据，专为 AI agent 工作流设计。
+**自带抓包、Mock 与 Web UI 的 protobuf / JSON 调试工具** —— 不再依赖 whistle。
 
-插件自动识别协议（按 Charles Protocol Buffers 自描述规则：Content-Type 携带 `desc`/`messageType`/`delimited`），直接在 PB message 对象层面操作（不走 JSON 转换），AI agent 通过 CLI 按 path 改字段，不碰 protobuf wire format。
+pbmockx 在本机启动一个 HTTP/HTTPS 代理，自动识别 Charles 风格的自描述 protobuf
+（`Content-Type: application/x-protobuf; desc="..."; messageType="..."`）与 JSON，
+把响应展示成带类型标注的字段树，并支持按 path 直接改字段。**PB 全程不转 JSON**，
+避免 int64→string、enum→string 的歧义；同时为人和 AI agent 各提供一套顺手的界面。
+
+```
+客户端 / Android / curl ──proxy──► pbmockx (:8899)
+                                    ├─ 抓包（HTTP / HTTPS MITM / WebSocket / SSE）
+                                    ├─ Mock（patch / map_local / map_remote）
+                                    ├─ 控制 API（CLI 使用）
+                                    └─ Web UI（实时 flow / 字段树 / 规则编辑）
+```
 
 ## 能力
 
-- **PB 字段树查看**：whistle Network → Request/Response 区的 **PBView** 子标签页（不是独立父级 tab），展示结构化字段树。格式 `name#N (type) = value`——字段名 + **字段号**（`#N`）+ 类型标注 + 值，默认折叠，可展开/折叠。int64 显示数字 + `(int64)`，enum 显示数字 + 名字 + `(enum)`，`google.protobuf.Any` 按 `type_url` 嵌套解码（显示 `Any → <type>`）；未设置字段显示 `(unset)`（灰色）
-- **JSON pretty-JSON**：whistle 自带，插件不管
-- **PB + JSON 统一 mock**：
-  - `patch`：按 path 改字段（PB message 对象层面操作，不走 JSON；path 可穿透 `google.protobuf.Any` 字段——pipe hook 自动展开/回包）
-  - `map_local(data)`：dict → PB encode 整 body 替换
-  - `map_local(file)` / `map_remote`：whistle 原生规则（file:// / https://），由插件 rulesServer 动态生成
-- **pipe 单向 mock**：`pattern pipe://pbmockx` 接管流量。请求体只记录、立刻转发（不 mock）。响应仅当 Content-Type 为 JSON/PB 且有 patch/map_local(data) 规则时才「解压 gzip/deflate/br → decode → 展开 Any → patch → 回包 Any → encode」（响应头取自 `req.headers`），返回未压缩 body 由 whistle 处理 content-encoding；否则按 chunk 透传。
-- **原生规则动态生成**：map_remote / map_local(file) 由插件 rulesServer 每请求生成 whistle 原生规则（`rules.txt` 的 `* whistle.pbmockx://` 长协议触发，无需用户配置、不写 whistle 规则文件）
-- **持久化规则**：rules.yaml 实时写回 + 插件启动时自动加载，map_local(data) 数据存外部 mock-data/ 文件
-- **CLI + w2 exec + SKILL.md**，所有命令支持 `-h`/`--help`，多 agent 通用
+- **抓包**：HTTP 正向代理、HTTPS CONNECT 中间人（自带 CA）、gzip/deflate/br、SSE 流式透传、WebSocket 隧道、大 body 背压转发。
+- **PB 字段树**：`name#N (type) = value`，带字段号/类型；enum 显示数字 + 名字，bytes 显示 base64 + 字节数，`google.protobuf.Any` 按 `type_url` 自动展开；未设置字段显示 `(unset)`。
+- **统一 Mock**（PB 与 JSON 行为一致）：
+  - `patch`：按 path 改字段，支持 repeated 的 `--append/--insert/--remove`、删除字段 `--unset`，path 可穿透 `Any`。
+  - `map_local`：整 body 替换（`--data` JSON 自动编码为 PB，或 `--file` 直接返回本地字节），支持状态码/响应头覆盖。
+  - `map_remote`：请求重定向（整体替换或 regex），可把线上接口指到本地 mock server。
+- **Web UI**：实时 flow 列表、请求/响应详情、交互式字段树、mock 前后对比、规则 CRUD/启停、mock 数据编辑、CA 下载与分平台接入指引。
+- **AI agent 友好**：CLI 默认折叠输出节省 token；`--path` 钻取子树；所有读命令支持 `--json`；SKILL.md 可直接注入 agent。
+- **零 whistle 依赖**：运行时只有 `protobufjs`、`long`、`js-yaml`、`node-forge` 四个依赖。
 
 ## 安装
 
-### 一行安装
+环境：Node.js ≥ 18（macOS / Linux 已验证；Windows 未实测）。
+
+> **当前重构分支尚未合入 `main`。** `main` 上的一键安装仍然安装旧的 whistle 插件；
+> 试用重构版请在 worktree 里跑本地脚本。合并后再使用下面的 remote 一行。
+
 ```bash
+# 本地重构分支（当前 worktree）
+cd .worktrees/refactor-native
+./scripts/install.sh
+
+# 合并到 main 后的远程一行
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh)"
+
+# 安装指定分支（分支已 push 到 GitHub 后）
+PBMOCKX_REF=refactor/native-v1 \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/refactor/native-v1/scripts/install.sh)"
 ```
 
-install.sh 会：
-1. 检查 Node.js >= 18
-2. 检查/安装 whistle（>= 2.9.100）
-3. 构建插件（tsc）
-4. npm link（让插件全局可用，`w2 start` 自动加载 + 注入 `rules.txt` 里的 `* pipe://pbmockx`）
-5. 重启 whistle 以加载插件 + rules.txt
-6. 安装 SKILL.md 到 agent skill 目录（`~/.agents/skills/` + `~/.claude/skills/`）
+安装脚本会：检查 Node → `npm install` + `tsc` → `npm link`（提供全局 `pbmockx` 命令，替换旧的 whistle 全局链接）→ 安装 agent skill → `pbmockx restart` 启动并验证。
 
-### 更新
+- 代码安装到 `~/.pbmockx/app`，数据（规则、mock、CA、日志）在 `~/.pbmockx`；可用 `PBMOCKX_INSTALL_DIR` / `PBMOCKX_DATA_DIR` 覆盖。
+- 如果终端里的 `pbmockx` 仍指向旧 whistle 插件，执行 `hash -r`，并用 `which -a pbmockx` 确认。
+- **从旧版（whistle 插件）升级**：先 `w2 stop` 释放 8899，再执行安装脚本；首次在默认数据目录启动时会自动导入旧的 `whistle-plugin/rules.yaml` 和 `mock-data/`。新 CA 需要重新在各设备上信任。
+- 卸载：`./scripts/install.sh --uninstall`；`--purge` 同时删除 `~/.pbmockx` 数据。
+
+## 快速开始
+
 ```bash
-pbmockx version --check                    # 检查更新
+pbmockx start                 # 启动代理 + 控制 API + Web UI（默认 127.0.0.1:8899）
+pbmockx status                # 查看运行状态 / 端口 / flow 数
+pbmockx ca                    # 查看 CA 路径、指纹与各平台安装说明
+pbmockx ca --out ./pbmockx-ca.crt   # 导出 CA 证书
+```
+
+1. **信任 CA**（HTTPS 必需）：把 CA 证书装到系统/浏览器/设备。UI 的 **Setup & CA** 页有一键下载和 macOS/Windows/Linux/Android 步骤。
+2. **配置代理**：HTTP/HTTPS 代理指向 `127.0.0.1:8899`（Android 可用 `pbmockx connect-android`）。
+3. **打开 Web UI**：`pbmockx web` 或访问 <http://127.0.0.1:8899/>。
+4. 触发一次请求，UI 左侧出现 flow；点开即可看请求/响应与 PB 字段树。
+
+### 局域网设备（手机 / 另一台电脑）
+
+默认只监听 `127.0.0.1`。要让同一 Wi-Fi/LAN 的设备访问：
+
+```bash
+pbmockx start --lan            # 等价于 --host 0.0.0.0 + 允许 LAN 访问 UI/API
 # 或
-sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh)" -- --update
-```
-### 证书
-```bash
-
-## 启动
-```bash
-w2 start                                 # npm link 后插件全局可用，w2 自动加载（含 rules.txt）
-```
-> 插件加载时通过 `whistle-plugin/rules.txt` 自动注入 `* pipe://pbmockx` 全量规则，
-> 所有请求默认走 pipe。请求体只记录不 mock；响应仅 JSON/PB 且有 mock 规则才 decode→patch→encode。
-> 无需手动在 whistle UI 写 pipe 规则。如需选择性 pipe，可在 whistle UI 里加更具体的 `pattern pipe://pbmockx` 规则。
-
-## CLI（AI agent 用）
-
-通过 `w2 exec pbmockx <cmd>` 或 npm link 后直接 `pbmockx <cmd>`：
-
-```bash
-# 查看
-pbmockx flows [--filter <regex>]                # decoded flow 列表（单 ID 同时含 req+res，无 dir 列）
-pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full]
-                                                #   默认折叠模式（节省 token，适合 AI agent）：
-                                                #     顶层 scalar 显示值，嵌套 message/repeated 显示 (type, N) ▸，
-                                                #     长字符串截断到 80 字符加 ...
-                                                #   --req/--res      只看 Request 或 Response（同一 flow，不是找另一个 flow）
-                                                #   --original       显示 patch 前原始数据（对比）
-                                                #   --path <path>    导航到子树（折叠显示），路径含 [n] 需加引号
-                                                #   --full           完整展开所有层级（不截断）
-
-# Mock — patch（按 path 改字段）
-pbmockx rules add 'api/game' game.name 测试      # patch 规则（PB/JSON 通用）
-pbmockx rules add 'api/game' game.enabled false  # value 支持 JSON：bool/数字/对象/数组
-pbmockx rules add 'api/game' game.name --unset   # 删除该键（键从 body 消失）
-pbmockx rules add 'api/game' items --append '{"id":9}'   # repeated 条目：追加/插入/删除
-pbmockx rules add 'api/game' items --insert 1 '{"id":8}'
-pbmockx rules add 'api/game' items --remove 0
-pbmockx rules list [--type patch|map_local|map_remote]   # value 列：JSON.stringify 值 / (unset)
-pbmockx rules del <id>
-pbmockx rules save / reload                      # 启动时自动加载；手动改 rules.yaml 后用 reload
-
-# Mock — map-local（整 body 替换）
-pbmockx map-local add 'api/game' --data '{"name":"test"}' [--desc <url>] [--messageType <type>]
-pbmockx map-local add 'api/game' --file /path/to/mock.pb    # whistle native file://
-pbmockx map-local list / del <id>
-
-# Mock — map-remote（请求重定向，whistle native）
-pbmockx map-remote add 'api/old' 'https://new.example.com/new' [--regex]
-pbmockx map-remote list / del <id>
-
-# 进程管理（w2 原生）
-w2 start / w2 stop / w2 restart / w2 status
-w2 ca                                          # PC 证书
-
-# 工具维护
-pbmockx web                                    # 打开 whistle UI
-pbmockx doctor                                 # 全链路健康检查（含 npm link 状态）
-pbmockx fix                                    # 自动修复：总是 rebuild（tsc）→ npm link → w2 restart → verify
-pbmockx agent-doc                              # 打印 SKILL.md
-pbmockx skill install                          # 安装 SKILL.md 到 agent 目录（~/.agents + ~/.claude）
-pbmockx version [--check]                      # 版本 + 远程检查
-pbmockx connect-android [-s <serial>]          # Android 代理 + 证书
-
-# 帮助
-pbmockx -h / --help                            # 顶层帮助
-pbmockx <command> -h / --help                  # 各命令的详细帮助（flows/decode/rules/map-local/map-remote/web/doctor/connect-android/version）
+pbmockx start --host 0.0.0.0
 ```
 
-> `rules add` 的 value 先按 JSON 解析（`int` / `bool` / `null` / 对象 / 数组），否则按字符串；`false` 与 `null` 会真实写入 body 并持久化到 `rules.yaml`（`0` / `''` / 对象 / 数组同样生效）。负数（如 `-1`）按 value 处理，set/append 缺 value 或未知 `--flag` 会报错并以退出码 1 结束（已知 flag：`--protocol` / `--append` / `--insert` / `--remove` / `--unset`）。`null` 是「键在、值为 `null`」，要删除键请用 `--unset`（键不存在）；`rules list` 的 value 列显示 `JSON.stringify` 后的值（`false`/`null` 原样）或 `(unset)`。
+启动日志会打印可用的 LAN 地址（例如 `http://192.168.1.23:8899/`）。
+手机/另一台电脑把 HTTP/HTTPS 代理设为 `<LAN-IP>:8899`，UI 直接打开 `http://<LAN-IP>:8899/`。
 
-## 接入 agent
-- **opencode / Claude Code**：`pbmockx skill install` 自动装到 `~/.agents/skills/pbmockx/` 和 `~/.claude/skills/pbmockx/`
-- **其他 agent**：跑 `pbmockx agent-doc` 取使用说明注入 system prompt
+- Android 走 Wi-Fi（非 USB）时用 `pbmockx connect-android --wifi`，会自动取本机 LAN IP。
+- 只想让 LAN 设备用代理、不想暴露 UI/API：在 `~/.pbmockx/config.json` 里设 `"ui": { "lanAccess": false }`。
+- **只建议在可信局域网开启**：开启后同网段设备能查看捕获的请求/响应。macOS 防火墙若拦截入站连接，请在“系统设置 → 网络 → 防火墙”中允许 `node`。
 
-## 文件
-- `whistle-plugin/` — whistle.pbmockx 插件（TS 源码 + CLI + PBView 子标签页；inspectorsTab 只声明 `req`/`res` 两个子标签，都叫 PBView，无 `networkColumn`）
-  - `src/pb-engine.ts` — PB 引擎（protobufjs + long，monkey-patch `fromDescriptor` 跳过 `resolveAll`，`addJSON` 加载 `descriptor.json` 等 WKT）
-  - `src/any-expand.ts` — `google.protobuf.Any` 展开/回包（patch path 穿透 Any 字段时使用：按 `type_url` 解码 value bytes → 应用 patch → 重新编码为 bytes）
-  - `src/flow-store.ts` — flow 存储（upsert by session ID，单 ID 同时持有 req+res，LRU 上限）
-  - `src/reqRead.ts` — 请求透传 + 记录（不 mock）
-  - `src/resRead.ts` — 仅 JSON/PB 且有 mock 规则时 decode → 展开 Any → patch → 回包 Any → encode（响应头取自 `req.headers`）；否则透传记录
-  - `src/rulesServer.ts` — map_remote/map_local(file) → whistle 原生规则（rules.txt 长协议触发，每请求动态生成；handler 保证永远回包）
-  - `src/uiServer/` — Koa CGI（规则 CRUD + flow 查询 + decode-pb）
-  - `public/pb-req.html` / `pb-res.html` — PBView 子标签页的薄 HTML（仅差 `<title>` 与 `window.__PBMOCKX_MODE`），共享 `public/pb-view.js`（**相对路径** `<script src="pb-view.js">` 引入；绝对 `/public/...` 会落到 whistle webui 404）。通过 whistleBridge 的 `addSessionActiveListener` + `getActiveSession` 拉取 session body，`POST /cgi-bin/decode-pb` 渲染字段树
-  - `bin/cli.js` — Node.js CLI（支持 `-h`/`--help`，`decode` 默认折叠模式 + `--path`/`--full`）
-  - `rules.txt` — 插件级规则（`* pipe://pbmockx`），加载插件时自动注入，全量 pipe 无需手写
-- `scripts/install.sh` — 一键安装（Node.js + whistle + 构建 + npm link + skill）；支持 `--update` / `--uninstall`
-  - `skill/SKILL.md` — agent 文档（与 CLI `agent-doc` 同源）；`skill/` 目录整体 symlink 到 agent 目录
-- `rules.yaml.example` — 规则模板
-- `tests/test_server.ts` + `test_pb-engine.ts` — 测试（100% Node.js）
+```bash
+# 用 curl 验证整条链路
+curl -x http://127.0.0.1:8899 http://example.com/
+curl -x http://127.0.0.1:8899 --cacert ~/.pbmockx/ca/ca.pem https://example.com/
+```
 
-> 已删除：`bin/pbmockx`（Python CLI）、`scripts/start.sh`、`addon/pbmockx_addon.py`、`scripts/start-mitmproxy.sh`、旧版内联 `public/pb-view.html`（已拆为 `pb-req.html` / `pb-res.html` 薄 HTML + 共享 `pb-view.js`）。whistle `networkColumn`（PB Type 列）也已移除。
+## CLI（AI agent 主入口）
 
-## 与 Charles 对比
-| | Charles | pbmockx (whistle) |
-|---|---|---|
-| PB schema | `.desc`/`.proto` | `.desc`（同 Charles 规则） |
-| PB 查看 | Structured Viewer | PBView 子标签页字段树（`name#N (type) = value`，带类型标注） |
-| PB 修改 | Structured 双击改 | CLI path+value（AI 可操作） |
-| JSON 查看 | Text | whistle pretty-JSON |
-| Map Local | 整文件替换 | 整文件 + dict→PB encode |
-| Map Remote | URL 映射 | 完整 URL + regex 替换 |
-| Patch | 无 | path 导航改字段 |
-| 持久化规则 | 启动时配置 | rules.yaml 实时写回 |
-| AI 接入 | 无 | CLI + w2 exec + agent-doc |
-| 类型歧义 | 无 | 无（不走 JSON 转换） |
+```bash
+# 抓包查看
+pbmockx flows [--filter <regex>] [--json]
+pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full] [--headers] [--json]
 
-## 相关
+# Patch：按 path 改响应字段
+pbmockx rules add 'api/game' game.name Mocked
+pbmockx rules add 'api/game' game.id 999 --protocol pb
+pbmockx rules add 'api/game' items --append '{"id":9}'       # repeated 条目：追加
+pbmockx rules add 'api/game' items --insert 1 '{"id":8}'     # 插入到 index 1 前
+pbmockx rules add 'api/game' items --remove 0                # 删除 index 0
+pbmockx rules add 'api/game' game.obsolete --unset           # 删除键
+pbmockx rules list [--type patch|map_local|map_remote] [--json]
+pbmockx rules del <id> | save | reload
 
-- [whistle](https://github.com/avwo/whistle) — Node.js 调试代理（本项目宿主）
-- [protobufjs](https://github.com/protobufjs/protobuf.js) — Protocol Buffers 实现（PB 引擎）
-- [lack](https://github.com/avwo/lack) — whistle 插件脚手架（开发用）
+# Map local：整 body 替换
+pbmockx map-local add 'api/game' --data '{"game":{"name":"Mocked"}}'
+pbmockx map-local add 'api/game' --file /path/to/mock.pb [--status 200]
+pbmockx map-local list | del <id>
+
+# Map remote：请求重定向
+pbmockx map-remote add 'api/old' 'https://new.example.com/new'
+pbmockx map-remote add 'api/(.*)' 'https://mock.local/$1' --regex
+pbmockx map-remote list | del <id>
+
+# 守护进程
+pbmockx start [--port 8899] [--host 127.0.0.1] [--lan] [--foreground]
+pbmockx stop | restart | status [--json] | logs [-f] [-n 100]
+pbmockx ca [--out <file>] [--info] [--regen --yes]
+
+# 维护
+pbmockx doctor [--json]       # Node / 数据目录 / CA / daemon / 规则 / 流量
+pbmockx fix                   # 构建 + 重启 + 验证
+pbmockx agent-doc             # 打印 SKILL.md
+pbmockx skill install|list|uninstall
+pbmockx version [--check]
+pbmockx connect-android [-s <serial>] [--wifi [host]]
+```
+
+- 所有命令支持 `-h/--help`；读命令支持 `--json`。
+- `decode` 默认折叠（节省 token）：嵌套 message 显示 `(type, N fields)`，repeated 显示 `(repeated type, N items)`，长字符串截断；用 `--path` 钻取、`--full` 全展开。
+- `--original` 显示 patch 前的响应，便于对比验证。
+
+## Web UI
+
+访问 <http://127.0.0.1:8899/>：
+
+- 左侧实时 flow 列表：method、状态、URL、协议、耗时、大小、mock/error/ws 标记；支持正则/文本过滤、暂停、清空、`j/k` 导航。
+- **Flat / Tree 两种视图**：Tree 按 host + URL 路径树聚合（相同接口的多次请求折叠计数），默认全部折叠，点击 host/路径分组逐层展开，展开状态会记住；选中请求所在分组有蓝色标记。长 URL 自动换行；列表宽度可拖拽（双击分隔条复位），并记住上次宽度。
+- 右侧详情：Summary（概览、匹配规则、耗时、错误）/ Request / Response；PB 字段树可交互展开；JSON 树；raw/hex 视图；patched ↔ original 切换；复制/下载 body。
+- **Rules** 抽屉：按类型分组，新增/删除/启停规则，编辑 `map_local(data)` 的 mock 数据文件，保存/重载 `rules.yaml`。
+- **Setup & CA**：代理地址、CA 下载、指纹、各平台安装步骤、数据目录与容量限制。
+- 深/浅色主题（`◐` 切换），SSE 实时更新，断线自动重连。
+
+## 数据与配置
+
+默认数据目录 `~/.pbmockx`（可用 `PBMOCKX_DATA_DIR` 覆盖）：
+
+```
+~/.pbmockx/
+├─ config.json        # 可选：端口/上游校验/抓包上限
+├─ runtime.json       # 运行时 pid/port
+├─ rules.yaml         # 所有 Mock 规则（自动加载/保存）
+├─ mock-data/         # map_local(data) 的 JSON 文件
+├─ ca/                # ca.pem / ca.key / leaf.key
+├─ desc-cache/        # .desc 条件请求缓存
+└─ logs/pbmockxd.log
+```
+
+常用环境变量：`PBMOCKX_PORT`、`PBMOCKX_HOST`、`PBMOCKX_DATA_DIR`、`PBMOCKX_LAN`、`PBMOCKX_LOG_LEVEL`。旧变量 `WHISTLE_PORT` 仍作为最低优先级回退。
+
+配置示例（`~/.pbmockx/config.json`）：
+
+```json
+{
+  "port": 8899,
+  "host": "127.0.0.1",
+  "ui": { "lanAccess": true },
+  "proxy": {
+    "mitm": true,
+    "mitmPorts": [443, 8443],
+    "bypass": ["*.apple.com"],
+    "upstreamTLS": { "rejectUnauthorized": true }
+  },
+  "capture": {
+    "maxFlows": 500,
+    "maxRecordBodyBytes": 4194304,
+    "maxTotalRecordBytes": 268435456,
+    "maxRewriteBodyBytes": 67108864
+  }
+}
+```
+
+- `map_remote` 指向 loopback/私网地址时自动跳过上游证书校验（兼容本地 HTTPS mock server）；其他目标默认校验证书。
+- 默认只监听 loopback。绑定 `--host 0.0.0.0` / `--lan` 后，代理、UI、控制 API 都可从 LAN 访问；`ui.lanAccess=false` 可只暴露代理（CA 下载端点仍允许，方便设备装证书）。
+
+## 限制
+
+- 暂不支持 HTTP/2 / gRPC（MITM 的 ALPN 只提供 `http/1.1`；上游统一 HTTP/1.1）。纯 h2/gRPC 接口请用 `proxy.bypass` 走原始隧道，或等待后续版本。
+- mTLS 双向认证流量无法中间人解析，建议 bypass。
+- 没有 breakpoint/intercept：用 patch 规则 + `rules reload` 实现动态修改。
+- WebSocket 仅隧道透传并记录字节数，不解析帧内容。
+- flow 保存在内存（LRU + 总字节上限），重启后清空。
+
+## 开发
+
+```bash
+npm install                 # 如沙箱限制 npm 缓存：npm install --cache .npm-cache
+npm run build               # tsc → dist/
+npm run typecheck
+npm test                    # node:test（核心 / CA / HTTP / HTTPS / PB / CLI）
+node bin/pbmockx.js --data-dir .dev-data start --port 8899
+```
+
+目录：`src/core`（PB/规则/流存储）、`src/proxy`（代理/CA）、`src/mock`（规则执行）、
+`src/server`（守护进程/控制 API/静态 UI）、`src/cli`、`web/`。开发细节见 `AGENTS.md`。
+
+## 从 whistle 迁移
+
+| 旧 | 新 |
+|---|---|
+| `w2 start/stop/status` | `pbmockx start/stop/status` |
+| `w2 ca` | `pbmockx ca` |
+| `pbmockx` via `w2 exec` | 直接 `pbmockx`（`npm link` 后） |
+| `whistle-plugin/rules.yaml` | `~/.pbmockx/rules.yaml`（首次启动自动导入） |
+| whistle CA | pbmockx CA（需重新信任） |
+| `pipe://pbmockx` 规则 | 不需要（所有流量默认经过 pbmockx） |
 
 ## License
 
