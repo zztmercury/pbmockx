@@ -31,20 +31,16 @@ pbmockx 在本机启动一个 HTTP/HTTPS 代理，自动识别 Charles 风格的
 
 环境：Node.js ≥ 18（macOS / Linux 已验证；Windows 未实测）。
 
-> **当前重构分支尚未合入 `main`。** `main` 上的一键安装仍然安装旧的 whistle 插件；
-> 试用重构版请在 worktree 里跑本地脚本。合并后再使用下面的 remote 一行。
-
 ```bash
-# 本地重构分支（当前 worktree）
-cd .worktrees/refactor-native
-./scripts/install.sh
-
-# 合并到 main 后的远程一行
+# 远程一行（main）
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh)"
 
-# 安装指定分支（分支已 push 到 GitHub 后）
-PBMOCKX_REF=refactor/native-v1 \
-  sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/refactor/native-v1/scripts/install.sh)"
+# 或本地仓库
+./scripts/install.sh
+
+# 安装指定分支/版本
+PBMOCKX_REF=<branch-or-tag> \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh)"
 ```
 
 安装脚本会：检查 Node → `npm install` + `tsc` → `npm link`（提供全局 `pbmockx` 命令，替换旧的 whistle 全局链接）→ 安装 agent skill → `pbmockx restart` 启动并验证。
