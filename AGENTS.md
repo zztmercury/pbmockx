@@ -113,6 +113,7 @@ skill/SKILL.md  唯一面向用户的 agent 指南（`agent-doc` 打印）
 
 - 零构建原生 ES Modules；由 `src/server/static.ts` 从 `web/` 提供。不要引入 CDN 或打包器。
 - `app.js`：状态、flow 列表/详情、SSE、抽屉/弹窗、快捷键；`tree.js`：PB/JSON 懒加载树；`panels.js`：规则与 CA/setup 面板；`api.js`：`/__pbmockx/api` fetch 封装。
+- flow 列表有 Flat/Tree 两种视图：Tree 用压缩路径 trie（host → 共享路径前缀 → 请求），折叠状态存 localStorage；列表宽度可拖拽（`--sidebar-width`，双击复位）。
 - 大响应注意懒加载：树节点只在首次展开时构建 DOM；raw/hex 视图限 64KB/400KB 显示。
 - 安全：`static.ts` 下发 CSP（self + inline style），无外链/CDN；控制 API 的 loopback 检查在 daemon 层。
 

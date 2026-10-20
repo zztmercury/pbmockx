@@ -21,6 +21,8 @@ const state = {
   drawer: null,
   bodyCache: new Map(),
   detailTimer: null,
+  listMode: localStorage.getItem('pbmockx-list-mode') || 'flat',
+  treeClosed: loadSet('pbmockx-tree-closed'),
 };
 
 const els = {
@@ -45,6 +47,10 @@ const els = {
   modalBody: $('#modal-body'),
   modalFoot: $('#modal-foot'),
   toasts: $('#toasts'),
+  splitter: $('#splitter'),
+  listMode: $('#list-mode'),
+  treeExpand: $('#tree-expand'),
+  treeCollapse: $('#tree-collapse'),
 };
 
 // --- utilities ---
@@ -81,6 +87,27 @@ function protoTag(p) {
 
 function timeOf(ts) {
   try { return new Date(ts).toLocaleTimeString(); } catch { return ''; }
+}
+
+function loadSet(key) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || '[]');
+    return new Set(Array.isArray(v) ? v : []);
+  } catch { return new Set(); }
+}
+
+function saveSet(key, set) {
+  try { localStorage.setItem(key, JSON.stringify([...set].slice(-2000))); } catch {}
+}
+
+function splitFlowUrl(flow) {
+  const raw = flow.url || '';
+  try {
+    const u = new URL(raw);
+    return { host: u.host, pathname: u.pathname || '/', search: u.search || '', full: raw };
+  } catch {
+    return { host: '', pathname: raw, search: '', full: raw };
+  }
 }
 
 function setConn(ok, text) {
@@ -185,7 +212,7 @@ function drawerCtx() {
   };
 }
 
-// --- flow list ---
+// --- flow list (flat + tree) ---
 
 function activeFilter() {
   const raw = state.filter.trim();
@@ -204,55 +231,223 @@ function visibleFlows() {
   return state.flows.filter(fn);
 }
 
+function flowRow(f, depth = 0, basePath = '') {
+  const { host, pathname, search } = splitFlowUrl(f);
+  // Inside a path group, show only the suffix relative to that group; the
+  // group row already carries the long shared prefix.
+  let displayPath = pathname;
+  if (depth > 0 && basePath && pathname.startsWith(basePath)) {
+    const rest = pathname.slice(basePath.length);
+    // Flows that end exactly at the group path are distinguished by query.
+    displayPath = rest || (search ? '' : '/');
+  }
+  const row = el('div', 'flow-row leaf-row' + (depth ? ' depth-' + depth : '') + (f.id === state.selectedId ? ' selected' : ''));
+  row.dataset.id = f.id;
+  row.title = f.url || '';
+  if (depth) row.style.paddingLeft = (12 + depth * 16) + 'px';
+  row.setAttribute('role', 'option');
+  row.setAttribute('aria-selected', f.id === state.selectedId ? 'true' : 'false');
+  row.appendChild(el('div', 'method ' + (f.method || ''), f.method || '?'));
+
+  const main = el('div', 'flow-main');
+  const urlLine = el('div', 'flow-url');
+  // Under a host group the host is already shown by the parent row; only the
+  // flat list and the host row itself need it inline.
+  if (host && depth === 0) urlLine.appendChild(el('span', 'host', host));
+  urlLine.appendChild(el('span', 'path', displayPath + search));
+  main.appendChild(urlLine);
+
+  const meta = el('div', 'flow-meta');
+  if (f.status) meta.appendChild(el('span', 'status ' + statusClass(f.status), String(f.status)));
+  const p = protoTag(f.resProto || f.reqProto);
+  if (p) meta.appendChild(p);
+  if (f.mocked) meta.appendChild(el('span', 'tag mock', 'mock'));
+  if (f.upgrade) meta.appendChild(el('span', 'tag ws', 'ws'));
+  if (f.patchError || f.error) meta.appendChild(el('span', 'tag err', 'err'));
+  if (f.durationMs !== undefined && f.durationMs !== null) meta.appendChild(el('span', '', fmtDuration(f.durationMs)));
+  if (f.resSize) meta.appendChild(el('span', '', fmtBytes(f.resSize)));
+  meta.appendChild(el('span', 'spacer'));
+  meta.appendChild(el('span', '', timeOf(f.ts)));
+  main.appendChild(meta);
+  row.appendChild(main);
+  row.addEventListener('click', () => selectFlow(f.id));
+  return row;
+}
+
+function buildTree(list) {
+  const hosts = new Map();
+  for (const f of list) {
+    const u = splitFlowUrl(f);
+    const hostName = u.host || '(unknown host)';
+    let h = hosts.get(hostName);
+    if (!h) {
+      h = {
+        key: 'h:' + hostName,
+        host: hostName,
+        latest: f,
+        flows: [],
+        root: { segment: '', path: '', children: new Map(), flows: [] },
+      };
+      hosts.set(hostName, h);
+    }
+    h.flows.push(f);
+    if (!h.latest) h.latest = f;
+    const segments = (u.pathname || '/').split('/').filter(Boolean);
+    let node = h.root;
+    for (const seg of segments) {
+      let child = node.children.get(seg);
+      if (!child) {
+        child = {
+          segment: seg,
+          path: (node.path || '') + '/' + seg,
+          children: new Map(),
+          flows: [],
+          latest: f,
+        };
+        node.children.set(seg, child);
+      }
+      if (!child.latest) child.latest = f;
+      node = child;
+    }
+    node.flows.push(f);
+  }
+  return [...hosts.values()];
+}
+
+function nodeTotal(node) {
+  if (node.total === undefined) {
+    node.total = node.flows.length;
+    for (const child of node.children.values()) node.total += nodeTotal(child);
+  }
+  return node.total;
+}
+
+function compressPathNode(node) {
+  let cur = node;
+  while (cur.flows.length === 0 && cur.children.size === 1) {
+    cur = [...cur.children.values()][0];
+  }
+  return cur;
+}
+
+function hostRow(h, open) {
+  const row = el('div', 'flow-row group-row host-row');
+  row.title = h.host + ' — ' + h.flows.length + ' request(s)';
+  row.appendChild(el('span', 'disclosure', open ? '▾' : '▸'));
+  row.appendChild(el('span', 'host-label', h.host));
+  row.appendChild(el('span', 'count-badge', String(h.flows.length)));
+  if (h.latest && h.latest.status) row.appendChild(el('span', 'last-status ' + statusClass(h.latest.status), String(h.latest.status)));
+  row.appendChild(el('span', 'spacer'));
+  if (h.latest) row.appendChild(el('span', 'last-dur', timeOf(h.latest.ts)));
+  row.addEventListener('click', () => {
+    if (open) state.treeClosed.add(h.key);
+    else state.treeClosed.delete(h.key);
+    saveSet('pbmockx-tree-closed', state.treeClosed);
+    renderFlows();
+  });
+  return row;
+}
+
+function pathGroupRow(host, node, depth, open) {
+  const row = el('div', 'flow-row group-row endpoint-row');
+  const count = nodeTotal(node);
+  row.title = host.host + (node.path || '/') + ' — ' + count + ' request(s)';
+  row.style.paddingLeft = (12 + depth * 16) + 'px';
+  row.appendChild(el('span', 'disclosure', open ? '▾' : '▸'));
+  row.appendChild(el('span', 'path-label', node.path || '/'));
+  row.appendChild(el('span', 'count-badge', String(count)));
+  if (node.latest && node.latest.status) row.appendChild(el('span', 'last-status ' + statusClass(node.latest.status), String(node.latest.status)));
+  if (node.latest && node.latest.durationMs !== undefined) row.appendChild(el('span', 'last-dur', fmtDuration(node.latest.durationMs)));
+  const key = 'p:' + host.host + '|' + node.path;
+  row.addEventListener('click', () => {
+    if (open) state.treeClosed.add(key);
+    else state.treeClosed.delete(key);
+    saveSet('pbmockx-tree-closed', state.treeClosed);
+    renderFlows();
+  });
+  return row;
+}
+
+function renderPathNode(host, node, depth, frag, basePath = '') {
+  // A terminal path with a single request needs no group row of its own.
+  if (node.flows.length === 1 && node.children.size === 0) {
+    frag.appendChild(flowRow(node.flows[0], depth, basePath));
+    return;
+  }
+  const cur = compressPathNode(node);
+  const key = 'p:' + host.host + '|' + cur.path;
+  const open = !state.treeClosed.has(key);
+  frag.appendChild(pathGroupRow(host, cur, depth, open));
+  if (!open) return;
+  for (const f of cur.flows) frag.appendChild(flowRow(f, depth + 1, cur.path));
+  for (const child of cur.children.values()) renderPathNode(host, child, depth + 1, frag, cur.path);
+}
+
+function renderTree(list) {
+  const frag = document.createDocumentFragment();
+  for (const h of buildTree(list)) {
+    const open = !state.treeClosed.has(h.key);
+    frag.appendChild(hostRow(h, open));
+    if (!open) continue;
+    for (const f of h.root.flows) frag.appendChild(flowRow(f, 1));
+    for (const child of h.root.children.values()) renderPathNode(h, child, 1, frag);
+  }
+  return frag;
+}
+
 function renderFlows() {
   const list = visibleFlows();
   els.flowList.innerHTML = '';
   els.flowCount.textContent = list.length + ' / ' + state.flows.length + ' flows';
   const empty = state.flows.length === 0;
   els.emptyList.classList.toggle('show', empty);
-  if (empty) {
-    els.flowList.style.display = 'none';
-  } else {
-    els.flowList.style.display = '';
+  els.flowList.style.display = empty ? 'none' : '';
+  document.body.classList.toggle('tree-mode', state.listMode === 'tree');
+
+  for (const b of els.listMode.querySelectorAll('button')) {
+    b.classList.toggle('active', b.dataset.mode === state.listMode);
+    b.setAttribute('aria-pressed', b.dataset.mode === state.listMode ? 'true' : 'false');
   }
 
+  if (empty) return;
+  if (state.listMode === 'tree') {
+    els.flowList.appendChild(renderTree(list));
+    return;
+  }
   const frag = document.createDocumentFragment();
-  for (const f of list) {
-    const row = el('div', 'flow-row' + (f.id === state.selectedId ? ' selected' : ''));
-    row.dataset.id = f.id;
-    row.setAttribute('role', 'option');
-    row.appendChild(el('div', 'method ' + (f.method || ''), f.method || '?'));
-
-    const main = el('div', 'flow-main');
-    const urlLine = el('div', 'flow-url');
-    let host = '';
-    let path = f.url || '';
-    try {
-      const u = new URL(f.url);
-      host = u.host;
-      path = u.pathname + u.search;
-    } catch {}
-    urlLine.appendChild(el('span', 'host', host));
-    urlLine.appendChild(el('span', 'path', path));
-    main.appendChild(urlLine);
-
-    const meta = el('div', 'flow-meta');
-    if (f.status) meta.appendChild(el('span', 'status ' + statusClass(f.status), String(f.status)));
-    const p = protoTag(f.resProto || f.reqProto);
-    if (p) meta.appendChild(p);
-    if (f.mocked) meta.appendChild(el('span', 'tag mock', 'mock'));
-    if (f.upgrade) meta.appendChild(el('span', 'tag ws', 'ws'));
-    if (f.patchError || f.error) meta.appendChild(el('span', 'tag err', 'err'));
-    if (f.durationMs !== undefined && f.durationMs !== null) meta.appendChild(el('span', '', fmtDuration(f.durationMs)));
-    if (f.resSize) meta.appendChild(el('span', '', fmtBytes(f.resSize)));
-    meta.appendChild(el('span', 'spacer'));
-    meta.appendChild(el('span', '', timeOf(f.ts)));
-    main.appendChild(meta);
-    row.appendChild(main);
-    row.addEventListener('click', () => selectFlow(f.id));
-    frag.appendChild(row);
-  }
+  for (const f of list) frag.appendChild(flowRow(f, 0));
   els.flowList.appendChild(frag);
+}
+
+function ensureTreeVisible(flow) {
+  if (!flow) return;
+  const u = splitFlowUrl(flow);
+  const hostName = u.host || '(unknown host)';
+  state.treeClosed.delete('h:' + hostName);
+  let path = '';
+  for (const seg of (u.pathname || '/').split('/').filter(Boolean)) {
+    path += '/' + seg;
+    state.treeClosed.delete('p:' + hostName + '|' + path);
+  }
+  saveSet('pbmockx-tree-closed', state.treeClosed);
+}
+
+function setAllTreeGroups(expand) {
+  for (const h of buildTree(visibleFlows())) {
+    if (expand) state.treeClosed.delete(h.key);
+    else state.treeClosed.add(h.key);
+    const walk = (node) => {
+      if (node.path) {
+        const key = 'p:' + h.host + '|' + node.path;
+        if (expand) state.treeClosed.delete(key);
+        else state.treeClosed.add(key);
+      }
+      for (const child of node.children.values()) walk(child);
+    };
+    walk(h.root);
+  }
+  saveSet('pbmockx-tree-closed', state.treeClosed);
+  renderFlows();
 }
 
 function upsertFlow(f, isNew) {
@@ -276,6 +471,7 @@ function selectFlow(id) {
   state.tab = 'summary';
   state.original = false;
   state.bodyMode = 'decoded';
+  if (state.listMode === 'tree') ensureTreeVisible(state.flows.find((f) => f.id === id));
   renderFlows();
   updateHash();
   loadDetail(id);
@@ -677,6 +873,17 @@ function wire() {
     state.filter = els.filter.value;
     renderFlows();
   });
+  for (const b of els.listMode.querySelectorAll('button')) {
+    b.addEventListener('click', () => {
+      state.listMode = b.dataset.mode === 'tree' ? 'tree' : 'flat';
+      localStorage.setItem('pbmockx-list-mode', state.listMode);
+      if (state.listMode === 'tree') ensureTreeVisible(state.flows.find((f) => f.id === state.selectedId));
+      renderFlows();
+    });
+  }
+  els.treeExpand.addEventListener('click', () => setAllTreeGroups(true));
+  els.treeCollapse.addEventListener('click', () => setAllTreeGroups(false));
+
   $('#btn-pause').addEventListener('click', () => {
     state.paused = !state.paused;
     $('#btn-pause').classList.toggle('active', state.paused);
@@ -707,6 +914,48 @@ function wire() {
   $('#btn-drawer-close').addEventListener('click', closeDrawer);
   $('#btn-modal-close').addEventListener('click', closeModal);
   $('#btn-copy-proxy').addEventListener('click', () => copyText(els.proxyAddr.textContent));
+
+  // Draggable divider: the flow list remembers its width across reloads.
+  const applySidebarWidth = (width, persist = true) => {
+    const max = Math.max(360, Math.min(1000, window.innerWidth - 360));
+    const w = Math.max(320, Math.min(max, Math.round(width)));
+    document.documentElement.style.setProperty('--sidebar-width', w + 'px');
+    if (persist) { try { localStorage.setItem('pbmockx-sidebar-width', String(w)); } catch {} }
+  };
+  const savedWidth = parseInt(localStorage.getItem('pbmockx-sidebar-width') || '', 10);
+  if (savedWidth) applySidebarWidth(savedWidth, false);
+  let dragging = false;
+  const startDrag = (e) => {
+    if (window.innerWidth <= 860) return;
+    dragging = true;
+    document.body.classList.add('resizing');
+    els.splitter.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  };
+  els.splitter.addEventListener('pointerdown', startDrag);
+  els.splitter.addEventListener('dblclick', () => applySidebarWidth(520));
+  window.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const left = document.querySelector('.layout').getBoundingClientRect().left;
+    applySidebarWidth(e.clientX - left);
+  });
+  const stopDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('resizing');
+  };
+  window.addEventListener('pointerup', stopDrag);
+  window.addEventListener('pointercancel', stopDrag);
+  els.splitter.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const current = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 520;
+    applySidebarWidth(current + (e.key === 'ArrowRight' ? 24 : -24));
+  });
+  window.addEventListener('resize', () => {
+    const current = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width')) || 520;
+    if (window.innerWidth > 860) applySidebarWidth(current, false);
+  });
   els.drawerBackdrop.addEventListener('click', closeDrawer);
   els.modalBackdrop.addEventListener('click', closeModal);
 

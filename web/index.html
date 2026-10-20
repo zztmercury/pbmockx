@@ -34,6 +34,12 @@
       <div class="list-head">
         <span id="flow-count">0 flows</span>
         <span class="spacer"></span>
+        <div class="seg mini" id="list-mode" role="group" aria-label="List layout">
+          <button type="button" data-mode="flat">Flat</button>
+          <button type="button" data-mode="tree">Tree</button>
+        </div>
+        <button type="button" class="icon-btn tiny" id="tree-expand" title="Expand all groups" aria-label="Expand all groups">⊞</button>
+        <button type="button" class="icon-btn tiny" id="tree-collapse" title="Collapse all groups" aria-label="Collapse all groups">⊟</button>
         <span class="legend"><i class="l-pb"></i>PB <i class="l-json"></i>JSON</span>
       </div>
       <div id="flow-list" class="flow-list" role="listbox" aria-label="Captured flows"></div>
@@ -45,6 +51,9 @@
         <button class="btn small" id="btn-copy-proxy">Copy proxy address</button>
       </div>
     </section>
+
+    <div class="splitter" id="splitter" role="separator" aria-orientation="vertical"
+         aria-label="Resize flow list" title="Drag to resize the flow list" tabindex="0"></div>
 
     <section class="detail" id="detail">
       <div class="empty-detail" id="empty-detail">

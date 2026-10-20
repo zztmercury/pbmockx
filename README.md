@@ -113,6 +113,7 @@ pbmockx connect-android [-s <serial>]
 访问 <http://127.0.0.1:8899/>：
 
 - 左侧实时 flow 列表：method、状态、URL、协议、耗时、大小、mock/error/ws 标记；支持正则/文本过滤、暂停、清空、`j/k` 导航。
+- **Flat / Tree 两种视图**：Tree 按 host + URL 路径树聚合（相同接口的多次请求折叠计数），长 URL 自动换行；列表宽度可拖拽（双击分隔条复位），并记住上次宽度。
 - 右侧详情：Summary（概览、匹配规则、耗时、错误）/ Request / Response；PB 字段树可交互展开；JSON 树；raw/hex 视图；patched ↔ original 切换；复制/下载 body。
 - **Rules** 抽屉：按类型分组，新增/删除/启停规则，编辑 `map_local(data)` 的 mock 数据文件，保存/重载 `rules.yaml`。
 - **Setup & CA**：代理地址、CA 下载、指纹、各平台安装步骤、数据目录与容量限制。

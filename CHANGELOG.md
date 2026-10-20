@@ -18,7 +18,7 @@
 ### 新增
 - **原生抓包**：HTTP/1.1 正向代理、HTTPS CONNECT 中间人、WebSocket 隧道、gzip/deflate/br、SSE 流式透传、大 body 背压转发；请求体旁路采样不阻塞转发。
 - **原生 Mock**：`patch`（含 `--append/--insert/--remove/--unset`、`google.protobuf.Any` 穿透）、`map_local(data|file)`、`map_remote`（含 regex，bare replacement 仍按 `https://` 处理）；`map_local` 的 `status`/`headers` 覆盖真正生效。
-- **Web UI**（`http://127.0.0.1:8899/`）：实时 flow 列表、请求/响应详情、交互式 PB 字段树、mock 前/后切换、规则 CRUD 与启停、mock 数据编辑、CA 下载与各平台接入指引、SSE 实时更新、深浅色主题。
+- **Web UI**（`http://127.0.0.1:8899/`）：实时 flow 列表（Flat/Tree 两种视图，Tree 按 host + 压缩路径树聚合）、可拖拽列表宽度、长 URL 自动换行、请求/响应详情、交互式 PB 字段树、mock 前/后切换、规则 CRUD 与启停、mock 数据编辑、CA 下载与各平台接入指引、SSE 实时更新、深浅色主题。
 - **新 CLI 命令**：`start`、`stop`、`restart`、`status`、`logs`、`ca`；`flows/decode/rules/map-local/map-remote/doctor/status` 支持 `--json`。
 - **原生生命周期**：detached 守护进程、`runtime.json` + pid、日志文件、端口占用诊断、优雅退出、`pbmockx fix`（构建 + 重启 + 验证）。
 - **规则启停**：`rules.yaml` 新增可选 `enabled` 字段（默认 true），UI 可直接切换。
