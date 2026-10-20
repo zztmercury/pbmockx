@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>pbmockx</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236366f1'/%3E%3Cpath d='M9 21V11h5.2c2.1 0 3.4 1.1 3.4 2.9 0 1.9-1.4 3-3.6 3H12v4.1H9zm3-6.3h1.9c.8 0 1.3-.35 1.3-1s-.5-1-1.3-1H12v2z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">pb</span>
+      <span class="brand-name">pbmockx</span>
+      <span class="ver" id="version"></span>
+    </div>
+    <div class="conn" id="conn" title="daemon status"><span class="dot"></span><span id="conn-text">connecting</span></div>
+    <div class="search-wrap">
+      <input id="filter" type="search" placeholder="Filter flows (regex or text)   /" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="actions">
+      <button id="btn-pause" class="btn" title="Pause live updates">Pause</button>
+      <button id="btn-clear" class="btn" title="Clear captured flows">Clear</button>
+      <button id="btn-rules" class="btn" title="Mock rules">Rules <span class="count" id="rules-count">0</span></button>
+      <button id="btn-setup" class="btn" title="Certificate and proxy setup">Setup</button>
+      <button id="btn-theme" class="btn icon" title="Toggle theme">◐</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="sidebar">
+      <div class="list-head">
+        <span id="flow-count">0 flows</span>
+        <span class="spacer"></span>
+        <span class="legend"><i class="l-pb"></i>PB <i class="l-json"></i>JSON</span>
+      </div>
+      <div id="flow-list" class="flow-list" role="listbox" aria-label="Captured flows"></div>
+      <div id="empty-list" class="empty-list">
+        <div class="empty-art">⌁</div>
+        <h3>Waiting for traffic</h3>
+        <p>Configure your device or app to use this proxy:</p>
+        <code id="proxy-addr">127.0.0.1:8899</code>
+        <button class="btn small" id="btn-copy-proxy">Copy proxy address</button>
+      </div>
+    </section>
+
+    <section class="detail" id="detail">
+      <div class="empty-detail" id="empty-detail">
+        <div class="empty-art">⇢</div>
+        <h2>Select a flow</h2>
+        <p>Pick a request on the left to inspect its headers and decoded body.</p>
+        <p class="muted">Protobuf responses are shown as a typed field tree — no JSON conversion.</p>
+      </div>
+      <div id="detail-body" class="detail-body hidden"></div>
+    </section>
+  </main>
+</div>
+
+<div class="drawer-backdrop" id="drawer-backdrop"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <div class="drawer-tabs" id="drawer-tabs"></div>
+    <button class="btn icon" id="btn-drawer-close" title="Close (Esc)">✕</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
+<div class="modal-backdrop" id="modal-backdrop"></div>
+<div class="modal" id="modal" aria-hidden="true">
+  <div class="modal-head"><span id="modal-title"></span><button class="btn icon" id="btn-modal-close">✕</button></div>
+  <div class="modal-body" id="modal-body"></div>
+  <div class="modal-foot" id="modal-foot"></div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
