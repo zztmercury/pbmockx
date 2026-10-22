@@ -230,7 +230,8 @@ pbmockx version [--check]
 
 | 现象 | 排查/处理 |
 |---|---|
-| `flows` 一直为空 | `pbmockx doctor`；确认客户端代理指向 `127.0.0.1:8899`；HTTPS 要信任 CA（`pbmockx ca` 看说明，Android 用 `connect-android`）。 |
+| `flows` 一直为空 | `pbmockx doctor`；确认客户端代理指向 `127.0.0.1:8899`；HTTPS 要信任 CA（`pbmockx ca` 看说明，Android 用 `connect-android`）。若连隧道记录都没有，说明客户端根本没走代理（或目标不是经过 CONNECT 的流量）。 |
+| 某个接口看不到抓包记录 | 先看列表里有没有 `proto=tunnel` / `method=CONNECT` 的记录，`pbmockx decode <id>` 会打印原因：`bypass`=被 `proxy.bypass` 排除；`port`=端口不在 `proxy.mitmPorts`；`mitm-disabled`=全局关了 MITM；`tls-handshake`=CA 没装好/证书固定/mTLS/非 TLS 协议；`ca-error`=签发证书失败。这三类分别对应「代理配置」「端口配置」「证书配置」问题。 |
 | HTTPS 请求报证书错误 | 客户端没信任 pbmockx CA。下载 `http://127.0.0.1:8899/__pbmockx/api/ca.pem` 并安装；Android 7+ 需系统证书或 networkSecurityConfig。 |
 | patch 不生效 | 检查 `url_pattern` 是否匹配完整 URL（`pbmockx flows` 里的 `url`）；确认响应 `proto` 是 protobuf/json（非 SSE/HTML）；规则是否被 `enabled:false` 关闭（UI 可看）；`pbmockx rules list`。 |
 | `decode` 报 `Couldn't find message X` | `.desc` 缺少依赖或 `messageType` 写错；检查响应 Content-Type 的 `desc`/`messageType`。 |
@@ -246,6 +247,7 @@ pbmockx version [--check]
 
 - 支持 HTTP/1.1 代理、HTTPS CONNECT MITM、gzip/deflate/br、SSE、WebSocket 隧道。
 - **不支持 HTTP/2 / gRPC**（MITM 只提供 `http/1.1`，上游统一 h1）；纯 h2/gRPC 请加到 `proxy.bypass` 走原始隧道。
+- 没被解密的 CONNECT（bypass / 非 MITM 端口 / `mitm=false` / TLS 握手失败）会在列表里留下**只有元数据**的隧道记录（`tunnel` 字段 + 上下行字节数），不含明文；`proxy.recordTunnels=false` 可关闭。
 - 无 breakpoint/intercept；所有修改用持续规则。
 - flow 存在内存（LRU + 总字节上限），重启后清空。
 - 规则、mock 数据、CA、日志都在 `~/.pbmockx/`（`PBMOCKX_DATA_DIR` 可覆盖）。

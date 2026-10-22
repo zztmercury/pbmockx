@@ -368,6 +368,30 @@ export async function renderSetupPanel(container, ctx) {
   proxy.appendChild(pb);
   container.appendChild(proxy);
 
+  // Why some connections never reach the flow list — visible without guesswork.
+  const px = info.proxy || {};
+  const scope = el('div', 'section card');
+  const sh = el('div', 'card-head');
+  sh.appendChild(el('span', 'title', 'Not decrypted'));
+  scope.appendChild(sh);
+  const sb = el('div', 'card-body');
+  sb.appendChild(el('div', 'note', 'HTTPS is only decrypted when CONNECT passes the rules below. Everything else is tunnelled as raw TCP and appears in the flow list as a metadata-only "tunnel" record.'));
+  const lines = [];
+  lines.push(['MITM', px.mitm === false ? 'disabled (proxy.mitm=false)' : 'enabled']);
+  const ports = px.mitmPorts || [];
+  lines.push(['ports', ports.length ? ports.join(', ') : 'all ports']);
+  const bypass = px.bypass || [];
+  lines.push(['bypass', bypass.length ? bypass.join(', ') : '(none)']);
+  lines.push(['tunnel records', px.recordTunnels === false ? 'off (proxy.recordTunnels=false)' : 'on']);
+  const grid = el('div', 'kv');
+  for (const [k, v] of lines) {
+    grid.appendChild(el('div', 'k', k));
+    grid.appendChild(el('div', 'v', v));
+  }
+  sb.appendChild(grid);
+  scope.appendChild(sb);
+  container.appendChild(scope);
+
   const caCard = el('div', 'section card');
   const ch = el('div', 'card-head');
   ch.appendChild(el('span', 'title', 'Certificate authority'));

@@ -19,6 +19,8 @@ export interface PbmockxConfig {
     mitm: boolean;
     mitmPorts: number[];
     bypass: string[];
+    /** Record un-decrypted CONNECT tunnels as metadata-only flows (diagnostics). */
+    recordTunnels: boolean;
     upstreamTLS: { rejectUnauthorized: boolean };
   };
   capture: {
@@ -41,6 +43,7 @@ export const DEFAULT_CONFIG: PbmockxConfig = {
     mitm: true,
     mitmPorts: [443, 8443],
     bypass: [],
+    recordTunnels: true,
     upstreamTLS: { rejectUnauthorized: true },
   },
   capture: {
@@ -165,6 +168,7 @@ export function loadConfig(overrides: Partial<PbmockxConfig> = {}, p: PbmockxPat
   cfg.port = Number(cfg.port) || DEFAULT_CONFIG.port;
   if (!Array.isArray(cfg.proxy.bypass)) cfg.proxy.bypass = [];
   if (!Array.isArray(cfg.proxy.mitmPorts)) cfg.proxy.mitmPorts = DEFAULT_CONFIG.proxy.mitmPorts;
+  if (cfg.proxy.recordTunnels === undefined) cfg.proxy.recordTunnels = true;
   return cfg;
 }
 

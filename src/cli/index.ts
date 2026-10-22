@@ -38,7 +38,7 @@ import {
   openUrl,
   waitForHealth,
 } from './lifecycle';
-import { printSection, printTable } from './render';
+import { printSection, printTable, printTunnel } from './render';
 import * as help from './help';
 
 const ROOT = packageRoot();
@@ -86,7 +86,7 @@ async function cmdFlows(args: string[]): Promise<void> {
       id: r.id,
       method: r.method,
       status: r.status || '',
-      proto: [r.reqProto, r.resProto].filter(Boolean).join('/'),
+      proto: r.tunnel ? 'tunnel' : [r.reqProto, r.resProto].filter(Boolean).join('/'),
       url: (r.url || '').slice(0, 70),
     }))
   );
@@ -107,6 +107,11 @@ async function cmdDecode(args: string[]): Promise<void> {
   const data = await client().get('/flows/' + encodeURIComponent(id) + qs);
   if (args.includes('--json')) {
     console.log(JSON.stringify(data, null, 2));
+    return;
+  }
+
+  if (data.tunnel) {
+    printTunnel(data);
     return;
   }
 

@@ -140,6 +140,11 @@ async function flowDetail(deps: ApiDeps, rec: FlowRecord, original: boolean): Pr
     mocked: !!rec.mocked,
     resPatched: !!rec.resPatched,
     upgrade: rec.upgrade,
+    tunnel: rec.tunnel,
+    tunnelBytesUp: rec.tunnelBytesUp,
+    tunnelBytesDown: rec.tunnelBytesDown,
+    tunnelClose: rec.tunnelClose,
+    clientIp: rec.clientIp,
     reqSize: rec.reqSize,
     resSize: rec.resSize,
     reqTruncated: !!rec.reqTruncated,
@@ -196,6 +201,7 @@ function publicInfo(deps: ApiDeps): any {
       mitm: deps.config.proxy.mitm,
       mitmPorts: deps.config.proxy.mitmPorts,
       bypass: deps.config.proxy.bypass,
+      recordTunnels: deps.config.proxy.recordTunnels,
     },
   };
 }

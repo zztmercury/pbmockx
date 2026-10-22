@@ -80,6 +80,7 @@ skill/SKILL.md  唯一面向用户的 agent 指南（`agent-doc` 打印）
 - **头部**：请求转发剥离 hop-by-hop（`connection`/`keep-alive`/`proxy-*`/`te`/`trailer`/`transfer-encoding`/`upgrade`）并重写 `Host`；响应剥离 hop-by-hop，改写时删旧 `content-length`。`set-cookie` 数组保留。
 - **上游 TLS**：默认校验；目标为 loopback/私网或全局关闭时跳过校验（本地 HTTPS mock server 场景）。上游 HTTP/1.1。
 - **WebSocket**：外层与 MITM 内层都监听 `upgrade`，手工发 upgrade 握手并双向 pipe；只记录 101/字节数，不解析帧。
+- **未解密隧道也必须记录**（诊断用）：`rawTunnel()` 先建一条 `tunnel=bypass|mitm-disabled|port` 的元数据 flow（`url=tcp://host:port`、`method=CONNECT`、上下行字节数、关闭方），`tlsClientError` / 签发叶子证书失败走 `recordTunnelFailure()` 记 `tunnel=tls-handshake|ca-error`。这是区分「代理配置问题」和「证书配置问题」的唯一信号，不要为了省记录量删掉；`proxy.recordTunnels=false` 是唯一开关。
 - **自环**：目标是本机同端口时返回 421，避免代理递归。
 
 ## CA / TLS MITM（src/proxy/ca.ts）
@@ -117,6 +118,7 @@ skill/SKILL.md  唯一面向用户的 agent 指南（`agent-doc` 打印）
 - `app.js`：状态、flow 列表/详情、SSE、抽屉/弹窗、快捷键；`tree.js`：PB/JSON 懒加载树；`panels.js`：规则与 CA/setup 面板；`api.js`：`/__pbmockx/api` fetch 封装。
 - flow 列表有 Flat/Tree 两种视图：Tree 用压缩路径 trie（host → 共享路径前缀 → 请求），默认全部折叠（只显示 host 分组），展开状态存 `pbmockx-tree-open-v2`；选中的请求会给其祖先分组加 `has-selected` 标记。列表宽度可拖拽（`--sidebar-width`，双击复位）。
 - 大响应注意懒加载：树节点只在首次展开时构建 DOM；raw/hex 视图限 64KB/400KB 显示。
+- 详情里的每个 block 必须用 `card()` 构建（不要手写 `.card`/`.card-head`），否则拿不到折叠开关、`aria-expanded` 和折叠状态持久化；`card()` 的 body 是懒构建的（折叠时不解码，展开才执行 builder），`Request/Response body` 的 raw 抓取也在 builder 里。
 - 安全：`static.ts` 下发 CSP（self + inline style），无外链/CDN；管理面访问控制（loopback / `ui.lanAccess` / CA 下载例外）在 daemon 层。
 
 ## 测试
@@ -132,6 +134,7 @@ node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 - `tests/e2e/http.test.ts`：HTTP 抓包、patch、gzip、map-local/map-remote、SSE、2MB 透传、HEAD/204、WebSocket、CLI 契约。
 - `tests/e2e/https.test.ts`：CONNECT MITM、HTTPS patch、CA 端点。
 - `tests/e2e/pb.test.ts`：PB 字段树、patch + original、patch_error 回退。
+- `tests/e2e/tunnel.test.ts`：未解密 CONNECT 的元数据记录（bypass / 非 MITM 端口 / TLS 握手失败 / `recordTunnels=false`）。
 - **测试陷阱**：daemon 与测试同进程时，**不要用 `spawnSync` 调 CLI**（阻塞事件循环导致 CLI 等不到 daemon）；用异步 `spawn`。上游服务器 close 时要 `closeAllConnections()`（upgrade socket 不会被 close 等待）。
 - 集成测试用 `tests/helpers.ts`：临时数据目录、随机端口、上游 HTTP/HTTPS、CONNECT 客户端、`jsonApi`。
 
@@ -157,7 +160,8 @@ node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 8. **CA 私钥权限 0600**；`pbmockx ca --regen` 需要 `--yes` 并重启 daemon。
 9. **管理面访问控制**：默认只允许 loopback；绑定 LAN 且 `ui.lanAccess=true` 时允许非 loopback（CA 下载端点始终允许）。`isLocalRequest` 负责区分本机 UI 与代理流量，remoteAddress 负责鉴权，两者不要混淆。
 10. **单端口自环**：目标是自身端口时返回 421/UI，不能递归代理。
-11. **请求体旁路采样必须在 pipe 同一 tick 开始**：不要在 `await planRequest()` 前 `req.on('data')` —— 那会让流进入 flowing 模式，body 在真正 pipe 到上游前被丢弃（POST 变空）。`startRequestTap()` 就是为此延后调用。
+11. **Web UI 布局**：`.layout` 必须显式 `grid-template-rows: minmax(0, 1fr)`，`.sidebar/.detail/.flow-list` 需要 `min-height: 0`。否则 auto 行按 sidebar 内容撑开，两栏的 `overflow:auto` 永不触发，`body{overflow:hidden}` 会把视口以下内容直接裁掉（曾导致「列表/body 没法滚动、长 header 看不到 body」）。Tree 分组排序（`buildTree()`/`sortedChildren()`，稳定字母序）和列表滚动锚定（`withListAnchor()`）不要退回按 recency 排序。
+12. **请求体旁路采样必须在 pipe 同一 tick 开始**：不要在 `await planRequest()` 前 `req.on('data')` —— 那会让流进入 flowing 模式，body 在真正 pipe 到上游前被丢弃（POST 变空）。`startRequestTap()` 就是为此延后调用。同理，隧道字节计数器只能在 `pipe()` 的那个同步块里挂 `data` 监听。
 
 ## 发版
 

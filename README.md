@@ -93,6 +93,7 @@ curl -x http://127.0.0.1:8899 --cacert ~/.pbmockx/ca/ca.pem https://example.com/
 # 抓包查看
 pbmockx flows [--filter <regex>] [--json]
 pbmockx decode <id> [--req|--res] [--original] [--path <path>] [--full] [--headers] [--json]
+# proto=tunnel 的行表示这条 CONNECT 没被解密（bypass / 端口 / TLS 握手失败），decode 会打印原因
 
 # Patch：按 path 改响应字段
 pbmockx rules add 'api/game' game.name Mocked
@@ -171,6 +172,7 @@ pbmockx connect-android [-s <serial>] [--wifi [host]]
     "mitm": true,
     "mitmPorts": [443, 8443],
     "bypass": ["*.apple.com"],
+    "recordTunnels": true,
     "upstreamTLS": { "rejectUnauthorized": true }
   },
   "capture": {
@@ -183,11 +185,12 @@ pbmockx connect-android [-s <serial>] [--wifi [host]]
 ```
 
 - `map_remote` 指向 loopback/私网地址时自动跳过上游证书校验（兼容本地 HTTPS mock server）；其他目标默认校验证书。
+- **未解密的连接也会出现在 flow 列表**：命中 `bypass`、端口不在 `mitmPorts`、`mitm=false`、TLS 握手失败（CA 没装/证书固定/mTLS/非 TLS 协议）的 CONNECT 会被记录成只含元数据的隧道 flow —— `method=CONNECT`、`url=tcp://host:port`、`tunnel=bypass|port|mitm-disabled|tls-handshake|ca-error`、上下行字节数与关闭方，**不含任何明文**。`"recordTunnels": false` 可关闭。这样「看不到记录」能区分成代理没生效 / 被规则排除 / 证书问题。
 - 默认只监听 loopback。绑定 `--host 0.0.0.0` / `--lan` 后，代理、UI、控制 API 都可从 LAN 访问；`ui.lanAccess=false` 可只暴露代理（CA 下载端点仍允许，方便设备装证书）。
 
 ## 限制
 
-- 暂不支持 HTTP/2 / gRPC（MITM 的 ALPN 只提供 `http/1.1`；上游统一 HTTP/1.1）。纯 h2/gRPC 接口请用 `proxy.bypass` 走原始隧道，或等待后续版本。
+- 暂不支持 HTTP/2 / gRPC（MITM 的 ALPN 只提供 `http/1.1`；上游统一 HTTP/1.1）。纯 h2/gRPC 接口请用 `proxy.bypass` 走原始隧道，或等待后续版本；这类连接会以 `tunnel=tls-handshake` 或 `tunnel=bypass` 的元数据记录出现在列表里。
 - mTLS 双向认证流量无法中间人解析，建议 bypass。
 - 没有 breakpoint/intercept：用 patch 规则 + `rules reload` 实现动态修改。
 - WebSocket 仅隧道透传并记录字节数，不解析帧内容。

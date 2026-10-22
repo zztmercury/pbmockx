@@ -50,6 +50,8 @@ export function helpFlows(): void {
   console.log(`Usage: pbmockx flows [--filter <regex>] [--json]
 
 List captured flows (one row per request; request and response share an id).
+Rows with proto=tunnel are CONNECT connections pbmockx did not decrypt (bypass,
+port not in mitmPorts, or a failed TLS handshake); 'decode <id>' prints why.
 
 Options:
   --filter <regex>   Filter by URL regex

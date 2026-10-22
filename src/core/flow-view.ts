@@ -26,6 +26,10 @@ export function flowSummary(r: FlowRecord): any {
     reqSize: r.reqSize,
     mocked: !!r.mocked,
     upgrade: r.upgrade,
+    tunnel: r.tunnel,
+    tunnelBytesUp: r.tunnelBytesUp,
+    tunnelBytesDown: r.tunnelBytesDown,
+    tunnelClose: r.tunnelClose,
     ts: r.ts,
   };
 }

@@ -11,6 +11,24 @@ import type { DetectInfo } from './content-type';
 export type RulePhase = 'request' | 'response';
 export type RuleOutcome = 'applied' | 'skipped' | 'error';
 
+/**
+ * Why a CONNECT tunnel was NOT decrypted. Such flows carry metadata only
+ * (no HTTP request/response), which is what makes "I see no capture"
+ * diagnosable: bypass / port / CA problems each get their own record.
+ */
+export type TunnelReason = 'bypass' | 'mitm-disabled' | 'port' | 'tls-handshake' | 'ca-error';
+export type TunnelClose = 'client' | 'upstream' | 'error';
+
+/** Human-readable explanation of a tunnel reason (CLI + UI). */
+export const TUNNEL_REASON_TEXT: Record<TunnelReason, string> = {
+  bypass: 'host matches proxy.bypass — raw TCP tunnel, not decrypted',
+  'mitm-disabled': 'proxy.mitm is false — raw TCP tunnel, not decrypted',
+  port: 'port is not in proxy.mitmPorts — raw TCP tunnel, not decrypted',
+  'tls-handshake':
+    'TLS handshake failed — client rejected the pbmockx CA, pinned a certificate, uses mTLS, or spoke a non-TLS protocol',
+  'ca-error': 'pbmockx could not issue a leaf certificate for this host',
+};
+
 export interface MatchedRule {
   id: string;
   type: string;
@@ -66,6 +84,11 @@ export interface FlowRecord {
   upgrade?: string;
   wsBytesUp?: number;
   wsBytesDown?: number;
+  /** Present only when this flow is a CONNECT tunnel pbmockx could not decrypt. */
+  tunnel?: TunnelReason;
+  tunnelBytesUp?: number;
+  tunnelBytesDown?: number;
+  tunnelClose?: TunnelClose;
   aborted?: boolean;
   error?: string;
   hasReq?: boolean;

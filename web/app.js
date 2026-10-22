@@ -4,6 +4,8 @@ import { el, fmtBytes, fmtDuration, renderPbTree, renderJsonTree } from './tree.
 import { renderRulesPanel, renderSetupPanel } from './panels.js';
 
 const $ = (sel) => document.querySelector(sel);
+const COLLAPSED_CARDS_KEY = 'pbmockx-collapsed-cards-v1';
+
 const state = {
   flows: [],
   selectedId: null,
@@ -23,6 +25,7 @@ const state = {
   detailTimer: null,
   listMode: localStorage.getItem('pbmockx-list-mode') || 'flat',
   treeOpen: loadSet('pbmockx-tree-open-v2'),
+  collapsedCards: loadSet(COLLAPSED_CARDS_KEY),
 };
 
 const els = {
@@ -263,6 +266,10 @@ function flowRow(f, depth = 0, basePath = '') {
   if (p) meta.appendChild(p);
   if (f.mocked) meta.appendChild(el('span', 'tag mock', 'mock'));
   if (f.upgrade) meta.appendChild(el('span', 'tag ws', 'ws'));
+  if (f.tunnel) {
+    meta.appendChild(el('span', 'tag tunnel', 'tunnel'));
+    meta.appendChild(el('span', '', '\u2191 ' + fmtBytes(f.tunnelBytesUp || 0) + '  \u2193 ' + fmtBytes(f.tunnelBytesDown || 0)));
+  }
   if (f.patchError || f.error) meta.appendChild(el('span', 'tag err', 'err'));
   if (f.durationMs !== undefined && f.durationMs !== null) meta.appendChild(el('span', '', fmtDuration(f.durationMs)));
   if (f.resSize) meta.appendChild(el('span', '', fmtBytes(f.resSize)));
@@ -311,7 +318,22 @@ function buildTree(list) {
     }
     node.flows.push(f);
   }
-  return [...hosts.values()];
+  // Stable order: alphabetical, so a new request never reshuffles existing
+  // groups (recency ordering made the tree jump on every capture).
+  return [...hosts.values()].sort((a, b) => compareTreeLabel(a.host, b.host));
+}
+
+function compareTreeLabel(a, b) {
+  // '(unknown host)' sinks to the bottom; otherwise case-insensitive with
+  // numeric collation so /item-2 sorts before /item-10.
+  const ua = a === '(unknown host)';
+  const ub = b === '(unknown host)';
+  if (ua !== ub) return ua ? 1 : -1;
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function sortedChildren(node) {
+  return [...node.children.values()].sort((a, b) => compareTreeLabel(a.segment, b.segment));
 }
 
 function nodeTotal(node) {
@@ -389,7 +411,7 @@ function renderPathNode(host, node, depth, frag, basePath = '') {
   frag.appendChild(pathGroupRow(host, cur, depth, open));
   if (!open) return;
   for (const f of cur.flows) frag.appendChild(flowRow(f, depth + 1, cur.path));
-  for (const child of cur.children.values()) renderPathNode(host, child, depth + 1, frag, cur.path);
+  for (const child of sortedChildren(cur)) renderPathNode(host, child, depth + 1, frag, cur.path);
 }
 
 function renderTree(list) {
@@ -401,7 +423,7 @@ function renderTree(list) {
     frag.appendChild(hostRow(h, open));
     if (!open) continue;
     for (const f of h.root.flows) frag.appendChild(flowRow(f, 1));
-    for (const child of h.root.children.values()) renderPathNode(h, child, 1, frag);
+    for (const child of sortedChildren(h.root)) renderPathNode(h, child, 1, frag);
   }
   if (openHosts === 0 && list.length) {
     frag.appendChild(el('div', 'tree-hint', 'Groups are collapsed — click a host to expand. Use ⊞ / ⊟ for everything.'));
@@ -409,7 +431,47 @@ function renderTree(list) {
   return frag;
 }
 
+/**
+ * renderFlows() rebuilds the whole list on every SSE event. Without help the
+ * browser resets scrollTop to 0, so a busy capture yanks the user back to the
+ * top. Anchor on the request currently at the top of the viewport instead.
+ */
+function withListAnchor(rebuild) {
+  const listEl = els.flowList;
+  let anchorId = null;
+  let anchorOffset = 0;
+  if (listEl.scrollTop > 0) {
+    const box = listEl.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + 8, box.top + 4);
+    const row = hit && hit.closest ? hit.closest('.flow-row[data-id]') : null;
+    if (row) {
+      anchorId = row.dataset.id;
+      anchorOffset = row.getBoundingClientRect().top - box.top;
+    }
+  }
+  const prevScroll = listEl.scrollTop;
+  rebuild();
+  if (!anchorId) {
+    listEl.scrollTop = prevScroll;
+    return;
+  }
+  const again = listEl.querySelector('.flow-row[data-id="' + CSS.escape(anchorId) + '"]');
+  if (!again) {
+    listEl.scrollTop = prevScroll;
+    return;
+  }
+  const box = listEl.getBoundingClientRect();
+  // Chrome keeps (or scroll-anchors) scrollTop while innerHTML is rebuilt, so
+  // convert the row's viewport offset back into content coordinates first.
+  const contentTop = again.getBoundingClientRect().top - box.top + listEl.scrollTop;
+  listEl.scrollTop = Math.max(0, contentTop - anchorOffset);
+}
+
 function renderFlows() {
+  withListAnchor(() => paintFlows());
+}
+
+function paintFlows() {
   const list = visibleFlows();
   els.flowList.innerHTML = '';
   els.flowCount.textContent = list.length + ' / ' + state.flows.length + ' flows';
@@ -517,8 +579,13 @@ function sourceDetail(part) {
 function renderDetail() {
   const d = state.detail;
   if (!d) return;
+  if (d.tunnel) state.tab = 'summary';
   els.emptyDetail.classList.add('hidden');
   els.detailBody.classList.remove('hidden');
+  // SSE updates re-render this pane; wiping the DOM would otherwise snap the
+  // reader back to the top (and out of a long body).
+  const scroller = els.detailBody.closest('.detail');
+  const scrollTop = scroller ? scroller.scrollTop : 0;
   els.detailBody.innerHTML = '';
 
   const head = el('div', 'detail-head');
@@ -535,6 +602,7 @@ function renderDetail() {
   if (d.reqSize) sub.appendChild(el('span', '', 'req ' + fmtBytes(d.reqSize)));
   if (d.mocked) sub.appendChild(el('span', 'pill mock', 'mocked'));
   if (d.upgrade) sub.appendChild(el('span', 'pill', d.upgrade));
+  if (d.tunnel) sub.appendChild(el('span', 'pill' + (d.error ? ' err' : ''), 'not decrypted'));
   if (d.resPatched) sub.appendChild(el('span', 'pill mock', 'patched'));
   const copyUrl = el('button', 'btn small', 'Copy URL');
   copyUrl.addEventListener('click', () => copyText(d.url || ''));
@@ -544,6 +612,7 @@ function renderDetail() {
 
   const tabs = el('div', 'tabs');
   for (const [key, label] of [['summary', 'Summary'], ['req', 'Request'], ['res', 'Response']]) {
+    if (d.tunnel && key !== 'summary') continue;
     const b = el('button', 'tab' + (state.tab === key ? ' active' : ''), label);
     b.addEventListener('click', () => { state.tab = key; renderDetail(); });
     tabs.appendChild(b);
@@ -555,17 +624,65 @@ function renderDetail() {
   if (state.tab === 'summary') renderSummary(content, d);
   else if (state.tab === 'req') renderMessage(content, 'req');
   else renderMessage(content, 'res');
+  if (scroller && scrollTop) scroller.scrollTop = scrollTop;
 }
 
-function card(title, bodyBuilder, extraHead) {
-  const c = el('div', 'card');
+/** Stable identity for a card: counts ("Query (5)") must not create a new key. */
+function cardKey(title) {
+  return String(title).replace(/\s*\(\d+\)\s*$/, '').trim();
+}
+
+function setCardCollapsed(c, collapsed) {
+  const key = c.dataset.collapseKey;
+  c.classList.toggle('collapsed', collapsed);
+  c.classList.toggle('expanded', !collapsed);
+  const toggle = c.querySelector(':scope > .card-head > .card-toggle');
+  if (toggle) toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  const body = c.querySelector(':scope > .card-body');
+  // Lazy body: a collapsed card (e.g. a huge PB tree) is not even built, and
+  // the fetch/decoding work inside its builder is deferred until expanded.
+  if (!collapsed && body && body.dataset.pending === '1') {
+    delete body.dataset.pending;
+    body.innerHTML = '';
+    if (typeof body._build === 'function') body._build(body);
+  }
+  if (key) {
+    if (collapsed) state.collapsedCards.add(key);
+    else state.collapsedCards.delete(key);
+    saveSet(COLLAPSED_CARDS_KEY, state.collapsedCards);
+  }
+}
+
+function card(title, bodyBuilder, extraHead, opts = {}) {
+  const key = opts.key || cardKey(title);
+  const collapsed = state.collapsedCards.has(key);
+  const c = el('div', 'card collapsible ' + (collapsed ? 'collapsed' : 'expanded'));
+  c.dataset.collapseKey = key;
   const h = el('div', 'card-head');
+  const toggle = el('button', 'card-toggle');
+  toggle.type = 'button';
+  toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  toggle.setAttribute('aria-label', (collapsed ? 'Expand ' : 'Collapse ') + key);
+  toggle.appendChild(el('span', 'chev'));
+  toggle.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setCardCollapsed(c, !c.classList.contains('collapsed'));
+  });
+  h.appendChild(toggle);
   h.appendChild(el('span', 'title', title));
   h.appendChild(el('span', 'spacer'));
   if (extraHead) extraHead(h);
+  h.addEventListener('click', (e) => {
+    // Toolbar buttons (Decoded/Raw/Hex, Copy, Download) live in the head and
+    // must keep their own click.
+    if (e.target.closest && e.target.closest('button, a, input, select, textarea, .seg')) return;
+    setCardCollapsed(c, !c.classList.contains('collapsed'));
+  });
   c.appendChild(h);
   const b = el('div', 'card-body');
-  bodyBuilder(b);
+  b._build = bodyBuilder;
+  if (collapsed) b.dataset.pending = '1';
+  else bodyBuilder(b);
   c.appendChild(b);
   return c;
 }
@@ -580,7 +697,31 @@ function kv(list) {
   return grid;
 }
 
+const TUNNEL_TEXT = {
+  bypass: 'This host matches proxy.bypass, so pbmockx opened a raw TCP tunnel and never saw plaintext. Remove the bypass entry (or narrow it) to capture and mock it.',
+  'mitm-disabled': 'proxy.mitm is false globally, so every HTTPS connection is tunnelled without decryption. Set "mitm": true in config.json.',
+  port: 'This CONNECT port is not in proxy.mitmPorts (default 443, 8443), so the tunnel was not intercepted. Add the port to capture it.',
+  'tls-handshake': 'The CONNECT was intercepted but the TLS handshake failed. Usual causes: the CA is not installed/trusted on the client, the app pins its certificate, it requires mTLS, or it does not speak TLS/HTTP at all.',
+  'ca-error': 'pbmockx could not issue a leaf certificate for this host — check the data directory permissions and the CA files.',
+};
+
 function renderSummary(container, d) {
+  if (d.tunnel) {
+    container.appendChild(card('Not decrypted', (b) => {
+      b.appendChild(el('div', 'banner warn', TUNNEL_TEXT[d.tunnel] || d.tunnel));
+      b.appendChild(kv([
+        ['reason', d.tunnel],
+        ['connect', d.url],
+        ['error', d.error],
+        ['bytes up', d.tunnelBytesUp !== undefined ? fmtBytes(d.tunnelBytesUp) : ''],
+        ['bytes down', d.tunnelBytesDown !== undefined ? fmtBytes(d.tunnelBytesDown) : ''],
+        ['closed', d.tunnelClose],
+        ['duration', d.durationMs !== undefined ? fmtDuration(d.durationMs) : ''],
+        ['client', d.clientIp],
+      ]));
+    }));
+  }
+
   const overview = card('Overview', (b) => {
     const list = [
       ['method', d.method],
@@ -649,8 +790,9 @@ function renderSummary(container, d) {
 }
 
 function headersCard(title, headers) {
-  return card(title, (b) => {
-    if (!headers || !Object.keys(headers).length) {
+  const count = headers ? Object.keys(headers).length : 0;
+  const c = card(title + (count ? ' (' + count + ')' : ''), (b) => {
+    if (!count) {
       b.appendChild(el('div', 'body-empty', '(no headers)'));
       return;
     }
@@ -663,6 +805,8 @@ function headersCard(title, headers) {
     }
     b.appendChild(table);
   });
+  c.classList.add('headers-card');
+  return c;
 }
 
 function bodyToolbar(part, d) {
@@ -766,24 +910,41 @@ function renderDecodedBody(container, part) {
   }
 }
 
+function queryCard(url) {
+  let entries = [];
+  try {
+    entries = [...new URL(url, location.origin).searchParams.entries()];
+  } catch {}
+  if (!entries.length) return null;
+  const c = card('Query (' + entries.length + ')', (b) => {
+    const table = el('table', 'headers');
+    for (const [k, v] of entries) {
+      const tr = el('tr');
+      tr.appendChild(el('td', 'k', k));
+      tr.appendChild(el('td', 'v', v === '' ? '(empty)' : v));
+      table.appendChild(tr);
+    }
+    b.appendChild(table);
+  });
+  c.classList.add('query-card');
+  return c;
+}
+
 function renderMessage(container, part) {
   const d = state.detail;
   const isReq = part === 'req';
   const headers = isReq ? d.reqHeaders : d.resHeaders;
+  const qc = isReq ? queryCard(d.url) : null;
+  if (qc) container.appendChild(qc);
   container.appendChild(headersCard(isReq ? 'Request headers' : 'Response headers', headers));
 
-  const bodyCard = el('div', 'card');
-  const head = el('div', 'card-head');
-  head.appendChild(el('span', 'title', isReq ? 'Request body' : 'Response body'));
-  head.appendChild(el('span', 'spacer'));
-  head.appendChild(bodyToolbar(part, d));
-  bodyCard.appendChild(head);
-  const bodyBox = el('div', 'card-body');
-  bodyCard.appendChild(bodyBox);
-
-  if (state.bodyMode === 'decoded') {
-    renderDecodedBody(bodyBox, part);
-  } else {
+  // Build lazily: collapsing a huge body must not keep decoding it on every
+  // SSE re-render, and the raw fetch is deferred until the card is opened.
+  const bodyCard = card(isReq ? 'Request body' : 'Response body', (bodyBox) => {
+    if (state.bodyMode === 'decoded') {
+      renderDecodedBody(bodyBox, part);
+      return;
+    }
     bodyBox.appendChild(el('div', 'body-empty', 'Loading…'));
     fetchBodyText(d, part, state.bodyMode)
       .then((text) => {
@@ -795,7 +956,9 @@ function renderMessage(container, part) {
         bodyBox.innerHTML = '';
         bodyBox.appendChild(el('div', 'banner err', e.message));
       });
-  }
+  }, (head) => {
+    head.appendChild(bodyToolbar(part, d));
+  });
   container.appendChild(bodyCard);
 }
 

@@ -3,6 +3,31 @@
  */
 
 import { renderTree, renderTreeCollapsed, navigatePath } from '../core/field-tree';
+import { TUNNEL_REASON_TEXT, type TunnelReason } from '../core/flow-store';
+
+export function fmtBytes(n: number | undefined | null): string {
+  if (!n) return '0 B';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+/**
+ * A CONNECT tunnel pbmockx never decrypted. Printing something explicit here
+ * matters: "no flow at all" and "flow with a reason" are the difference
+ * between a broken proxy setup and an intentional bypass.
+ */
+export function printTunnel(d: any): void {
+  const reason = TUNNEL_REASON_TEXT[d.tunnel as TunnelReason] || String(d.tunnel);
+  console.log('=== Tunnel (not decrypted) ===');
+  console.log('CONNECT ' + (d.url || ''));
+  console.log('reason: ' + reason);
+  if (d.error) console.log('error: ' + d.error);
+  console.log('bytes: up ' + fmtBytes(d.tunnelBytesUp) + '  down ' + fmtBytes(d.tunnelBytesDown));
+  if (d.tunnelClose) console.log('closed: ' + d.tunnelClose);
+  if (d.clientIp) console.log('client: ' + d.clientIp);
+  console.log('flow id: ' + d.id);
+}
 
 export function printTable(rows: any[], headers?: string[]): void {
   if (!rows || rows.length === 0) {

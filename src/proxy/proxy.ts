@@ -20,7 +20,7 @@ import { URL } from 'url';
 
 import type { PbmockxConfig } from '../core/config';
 import { isLoopbackAddress } from '../core/config';
-import type { FlowStore, MatchedRule } from '../core/flow-store';
+import type { FlowStore, MatchedRule, TunnelClose, TunnelReason } from '../core/flow-store';
 import { flowSummary } from '../core/flow-view';
 import {
   BodyTap,
@@ -72,6 +72,13 @@ function fullUrl(req: any, scheme: string): string {
 
 function stripBrackets(host: string): string {
   return (host || '').replace(/^\[|\]$/g, '');
+}
+
+/** `host:port`, bracketing IPv6 literals; port kept only when non-default. */
+function formatAuthority(host: string, port: number, omitDefault = false): string {
+  const h = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  if (omitDefault && port === 443) return h;
+  return `${h}:${port}`;
 }
 
 function parseAuthority(authority: string): { host: string; port: number } {
@@ -578,8 +585,9 @@ export class ProxyEngine {
       return;
     }
 
-    if (!this.shouldMitm(host, port)) {
-      this.rawTunnel(socket, host, port, head);
+    const decision = this.mitmDecision(host, port);
+    if (!decision.mitm) {
+      this.rawTunnel(socket, host, port, head, decision.reason || 'bypass');
       return;
     }
 
@@ -598,6 +606,10 @@ export class ProxyEngine {
       );
       tlsServer.on('tlsClientError', (e: any, sock: any) => {
         log.debug('TLS handshake failed:', host, e && e.message);
+        // Client rejected the CA, pinned a certificate, speaks mTLS, or the
+        // bytes were never TLS at all. Record it: this is the "why do I see
+        // no capture?" signal users need.
+        this.recordTunnelFailure(host, port, socket, e, 'tls-handshake');
         try { sock.destroy(); } catch {}
       });
       tlsServer.on('error', (e: any) => log.debug('TLS server error:', host, e && e.message));
@@ -609,40 +621,140 @@ export class ProxyEngine {
       tlsServer.emit('connection', socket);
     }).catch((e: any) => {
       log.warn('cannot create leaf cert for', host, e && e.message);
+      this.recordTunnelFailure(host, port, socket, e, 'ca-error');
       try { socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'); } catch {}
       try { socket.destroy(); } catch {}
     });
   }
 
-  private shouldMitm(host: string, port: number): boolean {
-    if (!this.config.proxy.mitm) return false;
-    if (matchesBypass(host, this.config.proxy.bypass || [])) return false;
-    const ports = this.config.proxy.mitmPorts || [];
-    if (ports.length && !ports.includes(port)) return false;
-    return true;
+  /** A CONNECT that was intercepted but never became an HTTP flow. */
+  private recordTunnelFailure(host: string, port: number, socket: any, e: any, reason: TunnelReason): void {
+    if (this.config.proxy.recordTunnels === false) return;
+    const authority = formatAuthority(host, port, true);
+    const url = 'https://' + authority + '/';
+    const start = Date.now();
+    const detail = e && e.message ? e.message : 'unknown error';
+    const rec = this.store.upsert(this.nextId(), {
+      url,
+      originalUrl: url,
+      method: 'CONNECT',
+      scheme: 'https',
+      host: authority,
+      path: '/',
+      clientIp: socket && socket.remoteAddress,
+      tunnel: reason,
+      tunnelBytesUp: 0,
+      tunnelBytesDown: 0,
+      tunnelClose: 'error',
+      error: (reason === 'tls-handshake' ? 'TLS handshake failed: ' : 'cannot issue leaf certificate: ') + detail,
+      timings: { start, end: start },
+      durationMs: 0,
+    });
+    this.events.broadcast('flow.new', flowSummary(rec));
   }
 
-  private rawTunnel(socket: net.Socket, host: string, port: number, head: Buffer): void {
+  /** Why a CONNECT is (not) intercepted — the reason ends up in the flow record. */
+  private mitmDecision(host: string, port: number): { mitm: boolean; reason?: TunnelReason } {
+    if (!this.config.proxy.mitm) return { mitm: false, reason: 'mitm-disabled' };
+    if (matchesBypass(host, this.config.proxy.bypass || [])) return { mitm: false, reason: 'bypass' };
+    const ports = this.config.proxy.mitmPorts || [];
+    if (ports.length && !ports.includes(port)) return { mitm: false, reason: 'port' };
+    return { mitm: true };
+  }
+
+  /**
+   * Raw TCP tunnel for traffic pbmockx must not (or cannot) decrypt. The
+   * plaintext is never touched, but the connection itself is recorded so
+   * "nothing shows up in the UI" can be told apart from "the proxy is not
+   * being used at all". Set `proxy.recordTunnels=false` to opt out.
+   */
+  private rawTunnel(socket: net.Socket, host: string, port: number, head: Buffer, reason: TunnelReason): void {
+    const addr = formatAuthority(host, port);
+    const record = this.config.proxy.recordTunnels !== false;
+    const id = record ? this.nextId() : '';
+    const timings: any = { start: Date.now() };
+    if (record) {
+      const rec = this.store.upsert(id, {
+        url: 'tcp://' + addr,
+        originalUrl: 'tcp://' + addr,
+        method: 'CONNECT',
+        scheme: 'tcp',
+        host: addr,
+        path: '',
+        clientIp: socket.remoteAddress,
+        tunnel: reason,
+        tunnelBytesUp: head && head.length ? head.length : 0,
+        tunnelBytesDown: 0,
+        timings,
+      });
+      this.events.broadcast('flow.new', flowSummary(rec));
+    }
+
+    let bytesUp = head && head.length ? head.length : 0;
+    let bytesDown = 0;
+    let closeReason: TunnelClose = 'client';
+    let errorText: string | undefined;
+    let finished = false;
+    let live = false;
+
+    const patch = (): any => ({
+      tunnelBytesUp: bytesUp,
+      tunnelBytesDown: bytesDown,
+      ...(errorText ? { error: errorText } : {}),
+      timings,
+    });
+
+    // A tunnel can live for minutes (SSE/IM/long-poll); show bytes as soon as
+    // they exist instead of leaving the row at 0 B until close.
+    const showProgress = (): void => {
+      if (!record || finished || live) return;
+      live = true;
+      this.events.broadcast('flow.update', flowSummary(this.store.upsert(id, patch())));
+    };
+
+    const finish = (): void => {
+      if (!record || finished) return;
+      finished = true;
+      timings.end = Date.now();
+      const rec = this.store.upsert(id, {
+        ...patch(),
+        tunnelClose: closeReason,
+        durationMs: timings.end - timings.start,
+      });
+      this.events.broadcast('flow.update', flowSummary(rec));
+    };
+
     const upstream = net.connect(port, host, () => {
       if (socket.destroyed) { upstream.destroy(); return; }
       socket.write('HTTP/1.1 200 Connection Established\r\nProxy-Agent: pbmockx\r\n\r\n');
       if (head && head.length) upstream.write(head);
+      // Counters sit next to pipe() on purpose: attaching a data listener
+      // earlier would put the socket in flowing mode and drop early bytes.
+      socket.on('data', (c: Buffer) => { bytesUp += c.length; showProgress(); });
+      upstream.on('data', (c: Buffer) => { bytesDown += c.length; showProgress(); });
       upstream.pipe(socket);
       socket.pipe(upstream);
     });
     this.trackSocket(upstream);
     upstream.on('error', (e: any) => {
       log.debug('tunnel failed:', host, port, e.message);
+      closeReason = 'error';
+      errorText = 'tunnel: ' + e.message;
       try {
         if (!socket.destroyed && !socket.writableEnded) {
           socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
         }
       } catch {}
       try { socket.destroy(); } catch {}
+      finish();
     });
     socket.on('error', () => { try { upstream.destroy(); } catch {} });
-    socket.on('close', () => { try { upstream.destroy(); } catch {} });
-    upstream.on('close', () => { try { socket.destroy(); } catch {} });
+    socket.on('close', () => { try { upstream.destroy(); } catch {} ; finish(); });
+    upstream.on('close', () => {
+      if (closeReason !== 'error') closeReason = 'upstream';
+      try { socket.destroy(); } catch {}
+      finish();
+    });
   }
 
   // --- WebSocket / upgrade tunneling ---
