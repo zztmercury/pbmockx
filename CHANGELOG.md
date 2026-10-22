@@ -5,6 +5,22 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.0] - 2026-10-22
+
+### 新增
+- **未解密的连接也会出现在 flow 列表**：命中 `proxy.bypass`、端口不在 `proxy.mitmPorts`、`proxy.mitm=false`、TLS 握手失败（CA 未安装/证书固定/mTLS/非 TLS 协议）以及签发叶子证书失败的 CONNECT，会被记录成只含元数据的隧道 flow —— `method=CONNECT`、`url=tcp://host:port`（握手失败为 `https://host/`）、`tunnel=bypass|mitm-disabled|port|tls-handshake|ca-error`、上下行字节数、关闭方与错误原因，**不含任何明文**。
+  - `pbmockx flows` 的 `proto` 列显示 `tunnel`；`pbmockx decode <id>` 打印原因、字节数与客户端地址，帮助区分「代理/端口配置问题」和「证书配置问题」。
+  - Web UI：列表显示 `tunnel` 标签与 ↑/↓ 字节数，详情页给出对应排查建议；Setup 面板新增「Not decrypted」卡片展示当前 `mitm` / `mitmPorts` / `bypass` / `recordTunnels` 生效值。
+  - 配置项 `proxy.recordTunnels`（默认 `true`）可关闭隧道记录。
+- **Request 面板显示 Query 参数**：新增 `Query (N)` 卡片，按解码后的 key/value 列出查询参数（重复 key 展开多行，空值显示 `(empty)`）。
+- **详情卡片可折叠**：Summary / Request / Response 里的每个 block（Overview、Query、headers、body、Timing、Matched rules…）都能点标题或左侧箭头折叠；状态存在 localStorage，按卡片名跨 flow 生效。折叠的卡片不构建 body（大 PB 树不用每次 SSE 重渲染都解码），Raw/Hex 的字节请求也延后到展开时。
+
+### 修复
+- **列表和详情都不滚动**：`.layout` 的 grid 行没有约束，行高按 sidebar 内容撑开（如 2150px），两栏的 `overflow:auto` 因此永远不触发，超出视口的部分被 `body{overflow:hidden}` 裁掉——长 header 时 body 直接看不到。改为 `grid-template-rows: minmax(0, 1fr)` + `.sidebar/.detail/.flow-list { min-height: 0 }`。
+- **Tree 分组位置乱跳**：host / 路径分组原先按「最新请求优先」排序，新请求会让分组互相换位。改为稳定的字母序（数字自然排序，`(unknown host)` 置底），组行仍显示最新状态与时间，新请求只更新内容不挪位置。
+- **新请求把列表顶回顶部**：每次 SSE 事件都会整表重渲染并清零 `scrollTop`。现在以视口顶部那条请求为锚点补偿滚动偏移；详情面板重渲染时同样保留滚动位置。
+- **长 header 挤掉 body**：Request/Response headers 卡片限制 260px 并内部滚动，标题显示 header 数量；滚动容器使用可见的细滚动条，避免 macOS 悬浮滚动条让人误以为不能滚动。
+
 ## [1.0.0] - 2026-10-20
 
 ### 破坏性变更（重构）
