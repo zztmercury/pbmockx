@@ -43,7 +43,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test dist/tests/",
+    "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
     "dev": "tsc -p tsconfig.json -w",
     "start": "node bin/pbmockxd.js",
     "prepack": "npm run build",

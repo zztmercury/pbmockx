@@ -125,7 +125,7 @@ skill/SKILL.md  唯一面向用户的 agent 指南（`agent-doc` 打印）
 
 ```bash
 npm run typecheck
-npm test                 # tsc + node --test dist/tests/
+npm test                 # tsc + node --test "dist/tests/**/*.test.js"
 node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 ```
 
@@ -145,8 +145,8 @@ node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 - **数据目录**：测试/本地开发用 `PBMOCKX_DATA_DIR=$PWD/.dev-data` 或 `--data-dir`，避免写 `~/.pbmockx`。
 - **局域网测试**：`0.0.0.0` 绑定后用本机 LAN IP 访问 UI/API 可模拟非 loopback 来源；`ui.lanAccess=false` 应返回 403（CA 下载端点除外）。
 - 运行时依赖只有 `protobufjs`、`long`、`js-yaml`、`node-forge`；不要重新引入 koa/whistle。
-- Node ≥ 18（`node:test` 可用）；TypeScript 不开 strict，编译到 `dist/`。
-- 无测试框架，使用 `node:test` + `assert`；测试文件编译后由 `node --test dist/tests/` 执行。
+- 运行时 Node ≥ 18；**跑测试需要 Node ≥ 22**（`node --test` 的 glob 参数）。Node 24 不接受裸目录（`node --test dist/tests/` 会当模块加载并 `MODULE_NOT_FOUND`），所以脚本用带引号的 glob。TypeScript 不开 strict，编译到 `dist/`。
+- 无测试框架，使用 `node:test` + `assert`；测试文件编译后由 `node --test "dist/tests/**/*.test.js"` 执行。
 
 ## 关键陷阱
 
