@@ -31,6 +31,21 @@ pbmockx 在本机启动一个 HTTP/HTTPS 代理，自动识别 Charles 风格的
 
 环境：Node.js ≥ 18（macOS / Linux 已验证；Windows 未实测）。
 
+### npm（推荐）
+
+包内已带编译好的 `dist/`，装完即可用，不需要 TypeScript：
+
+```bash
+npm i -g pbmockx          # 全局命令 pbmockx / pbmockxd
+pbmockx start
+
+npx pbmockx@latest start  # 不想全局安装时
+```
+
+升级：`npm i -g pbmockx@latest && pbmockx restart`。卸载：`npm rm -g pbmockx`（数据目录 `~/.pbmockx` 需手动删除）。
+
+### 安装脚本（从源码）
+
 ```bash
 # 远程一行（main）
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/zztmercury/pbmockx/main/scripts/install.sh)"

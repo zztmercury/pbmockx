@@ -14,6 +14,7 @@
   - 配置项 `proxy.recordTunnels`（默认 `true`）可关闭隧道记录。
 - **Request 面板显示 Query 参数**：新增 `Query (N)` 卡片，按解码后的 key/value 列出查询参数（重复 key 展开多行，空值显示 `(empty)`）。
 - **详情卡片可折叠**：Summary / Request / Response 里的每个 block（Overview、Query、headers、body、Timing、Matched rules…）都能点标题或左侧箭头折叠；状态存在 localStorage，按卡片名跨 flow 生效。折叠的卡片不构建 body（大 PB 树不用每次 SSE 重渲染都解码），Raw/Hex 的字节请求也延后到展开时。
+- **发布到 npm**：`npm i -g pbmockx` 即可安装，包内含编译好的 `dist/`、Web UI 与 agent skill，无需 TypeScript 工具链；`pbmockx fix` 在 npm 安装下会提示改用 `npm i -g pbmockx@latest`（源码重建只对 git checkout 有效）。
 
 ### 修复
 - **列表和详情都不滚动**：`.layout` 的 grid 行没有约束，行高按 sidebar 内容撑开（如 2150px），两栏的 `overflow:auto` 因此永远不触发，超出视口的部分被 `body{overflow:hidden}` 裁掉——长 header 时 body 直接看不到。改为 `grid-template-rows: minmax(0, 1fr)` + `.sidebar/.detail/.flow-list { min-height: 0 }`。

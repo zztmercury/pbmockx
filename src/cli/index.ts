@@ -493,6 +493,13 @@ async function cmdFix(args: string[]): Promise<void> {
   if (hasHelp(args)) { help.helpFix(); return; }
   console.log('=== pbmockx fix ===');
   console.log('[1/3] Building...');
+  // `fix` rebuilds from source, which only exists in a git checkout. Installs
+  // from npm ship compiled dist/ and no TypeScript sources.
+  if (!fs.existsSync(path.join(ROOT, 'tsconfig.json'))) {
+    console.error('  this install has no TypeScript sources (installed from npm).');
+    console.error('  upgrade instead: npm i -g pbmockx@latest && pbmockx restart');
+    process.exit(1);
+  }
   try {
     if (!fs.existsSync(path.join(ROOT, 'node_modules'))) {
       console.log('  node_modules missing — installing dependencies...');

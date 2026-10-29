@@ -172,6 +172,9 @@ echo "1.0.0" > VERSION
 git add VERSION package.json CHANGELOG.md && git commit -m "release: v1.0.0"
 git tag v1.0.0 && git push && git push --tags
 gh release create v1.0.0 --notes-file CHANGELOG.md --title "v1.0.0"
+npm publish            # publishConfig 已固定 registry.npmjs.org
 ```
 
 `VERSION` 是权威版本来源；`pbmockx version` 读取它，`doctor`/UI 显示它。`version --check` 非阻塞请求 GitHub releases。
+
+**npm 包内容由 `package.json#files` 白名单决定**（`bin/ dist/ web/ skill/ VERSION rules.yaml.example CHANGELOG.md`）。运行时依赖 `packageRoot()` 找 `<root>/VERSION`、`<root>/web`、`<root>/skill/SKILL.md`，所以这三样在 npm 安装下也必须存在——新增运行时资源目录时同步加进 `files`。`dist/` 在 `.gitignore` 里（npm 无 `.npmignore` 时会回退用 `.gitignore`），因此靠 `prepack: npm run build` 生成；`prepublishOnly: npm test` 保证发布前测试通过。`dist/tests/` 用 `!dist/tests/` 排除。`pbmockx fix` 需要 `tsconfig.json`，npm 安装下会提示改用 `npm i -g pbmockx@latest`。
