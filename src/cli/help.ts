@@ -82,3 +82,7 @@ export function helpSkill(): void {
 export function helpVersion(): void {
   console.log(t('help.version'));
 }
+
+export function helpLang(): void {
+  console.log(t('help.lang'));
+}

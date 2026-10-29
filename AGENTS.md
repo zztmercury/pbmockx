@@ -129,6 +129,7 @@ skill/SKILL.md  唯一面向用户的 agent 指南（`agent-doc` 打印）
 - **保持英文的机器契约**：`--json` 的 key/value、表格表头（`id method status proto url`）、`=== Request ===` 等分隔符、`OK/WARN/FAIL`、`patch_error:`/`decode_error:` 前缀、守护进程日志文件、HTTP 方法/头名、命令与参数名。
 - `--lang` 在 `main()` 里像 `--data-dir` 一样被消费掉，并写入 `process.env.PBMOCKX_LANG`；`pbmockx start` spawn 的守护进程因此继承同一语言，`/health` 返回的 `lang` 就是 Web UI 的默认语言。
 - 测试固定 `PBMOCKX_LANG=en`（`tests/helpers.ts` 与 e2e spawn 的 env），否则中文机器上断言全挂；`tests/unit/i18n.test.ts` 覆盖解析优先级、目录 key 对齐与 `--lang` 生效。
+- 用户主动切换：`pbmockx lang [zh|en|auto]` 用 `patchConfigFile()` 只改 `config.json` 的 `lang`（不会把默认值写满文件）；切换时 `initLang()` 立刻用新语言输出，若守护进程在跑则 `cmdRestart` 刷新 `/health.lang`（Web UI 默认语言）。
 
 ## 测试
 

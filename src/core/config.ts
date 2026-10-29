@@ -181,6 +181,29 @@ export function writeConfig(p: PbmockxPaths, cfg: PbmockxConfig): void {
   fs.renameSync(tmp, p.configFile);
 }
 
+/**
+ * Shallow-patch config.json in place: set keys, or delete them by passing
+ * `undefined`. Unlike writeConfig() this never materialises defaults, so
+ * `pbmockx lang zh` only adds `"lang": "zh"` to the file.
+ */
+export function patchConfigFile(p: PbmockxPaths, patch: Record<string, unknown>): void {
+  let raw: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(fs.readFileSync(p.configFile, 'utf-8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) raw = parsed;
+  } catch {
+    raw = {};
+  }
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete raw[key];
+    else raw[key] = value;
+  }
+  fs.mkdirSync(path.dirname(p.configFile), { recursive: true });
+  const tmp = p.configFile + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(raw, null, 2) + '\n');
+  fs.renameSync(tmp, p.configFile);
+}
+
 export interface RuntimeInfo {
   pid: number;
   port: number;

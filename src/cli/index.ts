@@ -15,14 +15,16 @@ import * as https from 'https';
 import {
   localAddresses,
   packageRoot,
+  patchConfigFile,
   paths,
   readConfigFile,
+  readRuntime,
   readVersion,
   resolveHost,
   resolvePort,
 } from '../core/config';
-import { normalizeLang } from '../core/lang';
-import { initLang, t, type MsgKey } from '../i18n';
+import { detectLangFromEnv, normalizeLang } from '../core/lang';
+import { getLang, initLang, t, type MsgKey } from '../i18n';
 import { client, health, ApiClient } from './api';
 import {
   _buildPatchRule,
@@ -672,6 +674,56 @@ function cmdSkill(args: string[]): void {
   help.helpSkill();
 }
 
+async function cmdLang(args: string[]): Promise<void> {
+  if (hasHelp(args)) { help.helpLang(); return; }
+  const p = paths();
+  const json = args.includes('--json');
+  const target = positionals(args.filter((a) => a !== '--json'))[0] || '';
+  const configLang = String((readConfigFile(p) as any).lang || '');
+  const source = process.env.PBMOCKX_LANG
+    ? 'env'
+    : configLang
+      ? 'config'
+      : detectLangFromEnv()
+        ? 'system'
+        : 'default';
+
+  if (!target) {
+    const lang = getLang();
+    if (json) {
+      console.log(JSON.stringify({ lang, source, config: configLang || null }, null, 2));
+      return;
+    }
+    console.log(t('lang.current', { lang: `${t(('lang.name.' + lang) as MsgKey)} (${lang})` }));
+    console.log(t('lang.source', { source: t(('lang.source.' + source) as MsgKey) }));
+    console.log(configLang ? t('lang.configLine', { value: configLang }) : t('lang.autoLine'));
+    if (source === 'env') console.log(t('lang.envHint', { env: process.env.PBMOCKX_LANG || '' }));
+    return;
+  }
+
+  if (target === 'auto') {
+    patchConfigFile(p, { lang: undefined });
+    // Re-resolve from env/system so the confirmation is in the resulting language.
+    initLang({});
+    console.log(t('lang.cleared'));
+  } else {
+    const normalized = normalizeLang(target);
+    if (!normalized) usageError(t('lang.invalid', { value: target }));
+    patchConfigFile(p, { lang: normalized });
+    initLang({ explicit: normalized });
+    console.log(t('lang.set', { lang: t(('lang.name.' + normalized) as MsgKey), value: normalized }));
+  }
+
+  // /health.lang feeds the Web UI default, so a running daemon must reload.
+  const rt = readRuntime(p);
+  if (rt) {
+    console.log(t('lang.restarting'));
+    await cmdRestart({ port: rt.port, host: rt.host });
+  } else {
+    console.log(t('lang.restartHint'));
+  }
+}
+
 async function cmdVersion(args: string[]): Promise<void> {
   if (hasHelp(args)) { help.helpVersion(); return; }
   const p = paths();
@@ -749,6 +801,7 @@ async function dispatch(cmd: string, args: string[]): Promise<void> {
     case 'agent-doc': cmdAgentDoc(args); return;
     case 'skill': cmdSkill(args); return;
     case 'version': await cmdVersion(args); return;
+    case 'lang': await cmdLang(args); return;
 
     case 'start': {
       if (hasHelp(args)) { help.helpStart(); return; }

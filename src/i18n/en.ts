@@ -54,6 +54,7 @@ Maintenance:
   agent-doc                                Print SKILL.md
   skill install|list|uninstall             Install agent docs
   version [--check]                        Show version / check releases
+  lang [zh|en|auto]                        Show or set the CLI + UI language
 
 Options:
   -h, --help                               Show help (use with a subcommand)
@@ -409,6 +410,32 @@ Show the version (optionally check GitHub releases).`,
   'ca.download': '  download  : http://127.0.0.1:{port}/__pbmockx/api/ca.pem',
   'ca.copyFile': '  copy file : pbmockx ca --out ./pbmockx-ca.crt',
   'ca.android': 'Android: pbmockx connect-android   (proxy + cert status; system cert needs root/Magisk)',
+
+  // --- lang ---
+  'lang.current': 'Language: {lang}',
+  'lang.source': 'Source  : {source}',
+  'lang.source.env': 'PBMOCKX_LANG environment variable',
+  'lang.source.config': 'config.json',
+  'lang.source.system': 'system locale',
+  'lang.source.default': 'default (English)',
+  'lang.name.en': 'English',
+  'lang.name.zh': '中文',
+  'lang.configLine': 'config  : lang={value}',
+  'lang.autoLine': 'config  : (unset — follow the system locale)',
+  'lang.envHint': 'note    : PBMOCKX_LANG={env} is set in this shell and wins over config.json',
+  'lang.set': 'Language set to {lang} (config.json: lang={value})',
+  'lang.cleared': 'Cleared config lang — now following the system locale',
+  'lang.invalid': 'Unsupported language "{value}" (use: zh, en, auto)',
+  'lang.restarting': 'Restarting the daemon so the Web UI picks it up...',
+  'lang.restartHint': 'The daemon is not running; the next `pbmockx start` will use it.',
+  'help.lang': `Usage: pbmockx lang [zh|en|auto]
+
+Show or set the language of the CLI output and the Web UI.
+
+  lang                  Show the current language and where it came from
+  lang zh | en          Persist it in config.json (restarts a running daemon)
+  lang auto             Remove the setting and follow the system locale
+  lang --json           Machine-readable {lang, source, config}`,
 } as const;
 
 export type MsgKey = keyof typeof en;

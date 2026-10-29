@@ -81,7 +81,10 @@ The CLI and the web UI both speak English and Chinese, and **follow the system l
 (`zh*` → Chinese, everything else → English):
 
 ```bash
-pbmockx --lang zh flows          # global flag, before or after the subcommand
+pbmockx lang zh                  # persist it in config.json; a running daemon restarts
+pbmockx lang                     # show the current language and where it came from
+pbmockx lang auto                # go back to following the system locale
+pbmockx --lang zh flows          # one command only (global flag, before or after the subcommand)
 PBMOCKX_LANG=zh pbmockx doctor   # or via the environment
 ```
 

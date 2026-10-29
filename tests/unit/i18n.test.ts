@@ -9,6 +9,8 @@
 import { test } from 'node:test';
 import * as assert from 'assert';
 import { execFileSync } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 import { detectLangFromEnv, normalizeLang, resolveLang, resolveLangFromConfig } from '../../src/core/lang';
@@ -26,6 +28,20 @@ function runCli(args: string[], env: NodeJS.ProcessEnv = {}): string {
 }
 
 const hasCjk = (s: string) => /[\u4e00-\u9fff]/.test(s);
+
+/** Run the CLI and return {status, stdout, stderr} without throwing on failure. */
+function runCliResult(args: string[], env: NodeJS.ProcessEnv = {}): { status: number; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync(process.execPath, [CLI, ...args], {
+      encoding: 'utf-8',
+      env: { ...process.env, PBMOCKX_LANG: '', LANG: 'en_US.UTF-8', LC_ALL: '', ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { status: 0, stdout, stderr: '' };
+  } catch (e: any) {
+    return { status: e.status ?? 1, stdout: String(e.stdout || ''), stderr: String(e.stderr || '') };
+  }
+}
 
 test('normalizeLang accepts locale strings and rejects unsupported ones', () => {
   assert.equal(normalizeLang('zh'), 'zh');
@@ -115,4 +131,42 @@ test('CLI version line is stable across languages', () => {
   const zh = runCli(['--lang', 'zh', 'version']).trim();
   assert.ok(/pbmockx \d+\.\d+\.\d+/.test(en), `unexpected version output: ${en}`);
   assert.equal(en, zh);
+});
+
+test('pbmockx lang shows, persists and clears the language', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pbmockx-lang-'));
+  try {
+    // nothing configured, English system locale
+    const initial = JSON.parse(runCli(['--data-dir', dir, 'lang', '--json']));
+    assert.equal(initial.lang, 'en');
+    assert.equal(initial.config, null);
+
+    // persist zh
+    const set = runCliResult(['--data-dir', dir, 'lang', 'zh']);
+    assert.equal(set.status, 0, set.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf-8')), { lang: 'zh' });
+
+    // the switch applies to this very command's output and to later runs
+    assert.ok(hasCjk(set.stdout), 'confirmation should be printed in the new language');
+    const after = JSON.parse(runCli(['--data-dir', dir, 'lang', '--json']));
+    assert.equal(after.lang, 'zh');
+    assert.equal(after.source, 'config');
+    assert.ok(hasCjk(runCli(['--data-dir', dir, 'doctor'])), 'CLI text follows config.json');
+
+    // env still wins over config
+    assert.equal(JSON.parse(runCli(['--data-dir', dir, 'lang', '--json'], { PBMOCKX_LANG: 'en' })).lang, 'en');
+
+    // auto removes the key
+    const cleared = runCliResult(['--data-dir', dir, 'lang', 'auto']);
+    assert.equal(cleared.status, 0, cleared.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf-8')), {});
+    assert.equal(JSON.parse(runCli(['--data-dir', dir, 'lang', '--json'])).lang, 'en');
+
+    // unsupported value is rejected
+    const bad = runCliResult(['--data-dir', dir, 'lang', 'fr']);
+    assert.notEqual(bad.status, 0);
+    assert.ok(bad.stderr.includes('fr'), 'error should name the value');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

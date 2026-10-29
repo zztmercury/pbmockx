@@ -76,7 +76,10 @@ PBMOCKX_REF=<branch-or-tag> \
 CLI 与 Web UI 都支持中英文，**默认跟随系统语言**（`zh*` → 中文，其余 → 英文）：
 
 ```bash
-pbmockx --lang zh flows          # 全局参数，可放在子命令之前或之后
+pbmockx lang zh                  # 持久切换：写 config.json，运行中的守护进程自动重启
+pbmockx lang                     # 查看当前语言、来源（flag / env / config / 系统）
+pbmockx lang auto                # 恢复跟随系统
+pbmockx --lang zh flows          # 单次命令，不持久化（全局参数，可在子命令前后）
 PBMOCKX_LANG=zh pbmockx doctor   # 或环境变量
 ```
 

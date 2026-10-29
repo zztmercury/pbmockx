@@ -50,6 +50,7 @@ Mock 规则：
   agent-doc                                打印 SKILL.md
   skill install|list|uninstall             安装 agent 文档
   version [--check]                        显示版本 / 检查新版本
+  lang [zh|en|auto]                        查看或切换 CLI 与 Web UI 的语言
 
 选项：
   -h, --help                               显示帮助（可配合子命令使用）
@@ -404,4 +405,30 @@ replacement 不带 scheme 时按 https:// 处理（兼容 whistle）。
   'ca.download': '  下载：http://127.0.0.1:{port}/__pbmockx/api/ca.pem',
   'ca.copyFile': '  复制文件：pbmockx ca --out ./pbmockx-ca.crt',
   'ca.android': 'Android：pbmockx connect-android   （配置代理 + 检查证书；系统证书需要 root/Magisk）',
+
+  // --- lang ---
+  'lang.current': '当前语言：{lang}',
+  'lang.source': '来源    ：{source}',
+  'lang.source.env': 'PBMOCKX_LANG 环境变量',
+  'lang.source.config': 'config.json',
+  'lang.source.system': '系统 locale',
+  'lang.source.default': '默认（英文）',
+  'lang.name.en': 'English',
+  'lang.name.zh': '中文',
+  'lang.configLine': '配置    ：lang={value}',
+  'lang.autoLine': '配置    ：未设置（跟随系统 locale）',
+  'lang.envHint': '注意    ：当前 shell 设置了 PBMOCKX_LANG={env}，它的优先级高于 config.json',
+  'lang.set': '语言已切换为 {lang}（config.json: lang={value}）',
+  'lang.cleared': '已清除 config 中的 lang，恢复跟随系统 locale',
+  'lang.invalid': '不支持的语言 "{value}"（可用：zh、en、auto）',
+  'lang.restarting': '正在重启守护进程，让 Web UI 一并生效...',
+  'lang.restartHint': '守护进程未运行，下次 pbmockx start 时会使用该设置。',
+  'help.lang': `用法：pbmockx lang [zh|en|auto]
+
+查看或设置 CLI 输出与 Web UI 的语言。
+
+  lang                  查看当前语言及其来源
+  lang zh | en          持久化到 config.json（运行中的守护进程会自动重启）
+  lang auto             删除该设置，恢复跟随系统 locale
+  lang --json           机器可读输出 {lang, source, config}`,
 };
