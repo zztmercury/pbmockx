@@ -1,6 +1,6 @@
 {
   "name": "pbmockx",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Native HTTP/HTTPS capture proxy with protobuf/JSON mock engine and web UI (no whistle)",
   "license": "MIT",
   "keywords": [

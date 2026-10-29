@@ -5,7 +5,7 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [1.2.0] - 2026-10-29
 
 ### 新增
 - **中英双语（CLI + Web UI）**：默认跟随系统语言（`zh*` → 中文，其余 → 英文），优先级 `--lang` > `PBMOCKX_LANG` > `config.json {"lang"}` > 系统 locale > `en`。
