@@ -170,10 +170,17 @@ echo "1.0.0" > VERSION
 # 同步 package.json 的 version
 # 更新 CHANGELOG.md
 git add VERSION package.json CHANGELOG.md && git commit -m "release: v1.0.0"
-git tag v1.0.0 && git push && git push --tags
+git tag -a v1.0.0 -m "v1.0.0"
+git push && git push --tags      # 推送 tag 触发 .github/workflows/release.yml 发 npm
 gh release create v1.0.0 --notes-file CHANGELOG.md --title "v1.0.0"
-npm publish            # publishConfig 已固定 registry.npmjs.org
+
+# 不发 tag 想验证流水线：默认 dry-run，不真的上传
+gh workflow run release.yml -f dry_run=true
 ```
+
+**发布走 GitHub Actions，不再手敲 `npm publish`。** `release.yml` 用 npm trusted publishing（OIDC，`id-token: write`），不需要 `NPM_TOKEN` secret，产物附带 provenance。首次使用需在 npmjs 包设置里配一次 Trusted publishing：GitHub Actions / `zztmercury` / `pbmockx` / workflow 文件名必须是 `release.yml` / environment 留空——文件名对不上会被 npm 拒绝。
+
+workflow 的硬校验：`npm -v >= 11.5.1`（trusted publishing 要求）、`VERSION == package.json version`、tag 名必须等于 `v<VERSION>`；非 tag ref 只允许 dry-run。版本已发布时打 `::warning::` 并跳过，所以重跑 tag 流水线不会红。`npm test` 会跑两遍（显式 step + `prepublishOnly`），多花几秒换取 CI 里可见的测试输出。
 
 `VERSION` 是权威版本来源；`pbmockx version` 读取它，`doctor`/UI 显示它。`version --check` 非阻塞请求 GitHub releases。
 

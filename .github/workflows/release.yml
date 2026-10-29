@@ -1,0 +1,105 @@
+name: release
+
+# Publishes to npm when a `v*` tag is pushed, using npm trusted publishing
+# (OIDC) — no NPM_TOKEN secret. Provenance is attached to the tarball.
+#
+# One-time setup on npmjs.com (package → Settings → Trusted publishing):
+#   publisher: GitHub Actions
+#   organization/user: zztmercury
+#   repository:        pbmockx
+#   workflow filename: release.yml
+#   environment:       (leave empty)
+#
+# Manual runs (`workflow_dispatch`) default to dry-run: all checks + pack, no upload.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: run checks and pack, but do not publish'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: npm publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC token: npm trusted publishing + provenance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          # Deliberately no registry-url / NODE_AUTH_TOKEN: trusted publishing
+          # exchanges the GitHub OIDC token for a short-lived npm credential.
+
+      - name: Toolchain versions
+        run: node -v && npm -v
+
+      - name: Require npm >= 11.5.1 (trusted publishing)
+        run: |
+          set -eu
+          have="$(npm -v)"
+          if [ "$(printf '%s\n%s\n' 11.5.1 "$have" | sort -V | head -n1)" != "11.5.1" ]; then
+            echo "::error::npm $have is too old; trusted publishing needs npm >= 11.5.1"
+            exit 1
+          fi
+
+      - name: Check version consistency
+        run: |
+          set -eu
+          version="$(tr -d '[:space:]' < VERSION)"
+          pkg="$(node -p "require('./package.json').version")"
+          echo "VERSION=$version package.json=$pkg ref=$GITHUB_REF_NAME type=$GITHUB_REF_TYPE"
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::VERSION ($version) and package.json version ($pkg) differ"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match v$version"
+            exit 1
+          fi
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck and test
+        run: npm test
+
+      - name: Publish
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: |
+          set -eu
+          version="$(tr -d '[:space:]' < VERSION)"
+          if [ "$GITHUB_REF_TYPE" != "tag" ] && [ "$DRY_RUN" != "true" ]; then
+            echo "::error::refusing to publish from a $GITHUB_REF_TYPE ref ($GITHUB_REF_NAME); push a v* tag"
+            exit 1
+          fi
+          if npm view "pbmockx@$version" version >/dev/null 2>&1; then
+            echo "::warning::pbmockx@$version is already published — skipping upload"
+            exit 0
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry run: npm publish --dry-run"
+            npm publish --dry-run
+          else
+            echo "publishing pbmockx@$version"
+            npm publish --provenance
+          fi
