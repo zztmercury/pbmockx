@@ -188,12 +188,11 @@ git push && git push --tags      # tag 触发 release.yml：npm publish + GitHub
 gh workflow run release.yml -f dry_run=true
 ```
 
-**发布走 GitHub Actions，不再手敲 `npm publish`。** 认证有两条路，`release.yml` 按顺序尝试：
+**发布走 GitHub Actions，不再手敲 `npm publish`。** `release.yml` 用 npm **trusted publishing**（OIDC + `id-token: write`），没有任何长期密钥或 secret。首次使用需在 npmjs 包设置里配一次：GitHub Actions / `zztmercury` / `pbmockx` / workflow 文件名必须是 `release.yml` / environment 留空 / **Allowed actions 必须勾 `npm publish`**（`npm stage publish` 与我们无关）——文件名对不上或没勾 publish，OIDC 发布会被拒。命令行等价：`npm trust github pbmockx --file release.yml --repo zztmercury/pbmockx --allow-publish`（需 2FA；非 TTY 里授权 URL 会被打码，得在真终端/浏览器里做）。
 
-1. **Trusted publishing（首选）**：OIDC + `id-token: write`，无长期密钥。需在 npmjs 包设置里配一次：GitHub Actions / `zztmercury` / `pbmockx` / workflow 文件名必须是 `release.yml` / environment 留空——文件名对不上 npm 会拒绝。命令行等价：`npm trust github pbmockx --file release.yml --repo zztmercury/pbmockx --allow-publish`（需 2FA，非 TTY 里授权 URL 会被打码，得在真终端/浏览器里做）。
-2. **`NPM_TOKEN` 兜底**：仓库 secret `NPM_TOKEN`（granular access token，只给 `pbmockx` 的 read+write，设过期时间）。`Configure npm auth` 步骤检测到它就把 `//registry.npmjs.org/:_authToken=…` 写进 `$RUNNER_TEMP/npmrc` 并通过 `NPM_CONFIG_USERCONFIG` 生效；没有则走 OIDC。
+provenance 依赖 job 的 `id-token: write`，与认证方式无关，`npm publish --provenance` 会自动签 SLSA 声明并写入 transparency log。**不要给这个 workflow 配 `NPM_TOKEN`**：有 token 反而会绕过 OIDC；`setup-node` 也刻意不传 `registry-url`（避免空 `NODE_AUTH_TOKEN` 干扰交换）。release 构建不开包管理器缓存（`package-manager-cache: false`），避免被污染的缓存影响发布内容。
 
-两条路都会跑 `npm publish --provenance`（provenance 依赖 `id-token: write`，与认证方式无关）。都没配时报 `ENEEDAUTH`，Publish 步骤会打印上面两种配置方法。注意 npm 正在收紧“绕过 2FA 的 token”，长期看 OIDC 才是正路。
+注意 npm 发版后 registry 有约 1–2 分钟延迟才会出现在 `npm view` / 安装源里（`Your package is being processed`），不要据此判断失败。
 
 `release.yml` 两个 job：`publish`（npm）+ `github-release`（只在 tag ref 上跑，`contents: write`）。GitHub Release 的正文由 `scripts/changelog-notes.js` 从 CHANGELOG 的 `## [<version>]` 段落抽取，同时写进 job summary；已存在的 release 不会覆盖（打 `::notice::` 跳过），带 `-` 的 tag（如 `v1.2.0-beta.1`）自动 `--prerelease`。
 

@@ -1,7 +1,7 @@
 name: release
 
 # Pushing a `v*` tag does two things:
-#   1. publish to npm (trusted publishing over OIDC — no NPM_TOKEN secret)
+#   1. publish to npm (trusted publishing over OIDC — no long-lived token)
 #   2. create the matching GitHub Release, notes taken from CHANGELOG.md
 #
 # One-time setup on npmjs.com (package → Settings → Trusted publishing):
@@ -47,9 +47,11 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          # Deliberately no registry-url / NODE_AUTH_TOKEN: trusted publishing
-          # exchanges the GitHub OIDC token for a short-lived npm credential.
+          # No registry-url / NODE_AUTH_TOKEN: trusted publishing exchanges the
+          # GitHub OIDC token for a short-lived credential.
+          # No package-manager cache either — npm recommends never caching in
+          # release builds (a poisoned cache could change what gets published).
+          package-manager-cache: false
 
       - name: Toolchain versions
         run: node -v && npm -v
@@ -86,22 +88,6 @@ jobs:
       - name: Typecheck and test
         run: npm test
 
-      - name: Configure npm auth
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -eu
-          if [ -n "${NPM_TOKEN:-}" ]; then
-            # Fallback when trusted publishing is not configured: a granular
-            # access token stored as the repository secret NPM_TOKEN.
-            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/npmrc"
-            chmod 600 "$RUNNER_TEMP/npmrc"
-            echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
-            echo "::notice::publishing with the NPM_TOKEN secret"
-          else
-            echo "no NPM_TOKEN secret — using npm trusted publishing (OIDC)"
-          fi
-
       - name: Publish
         env:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
@@ -122,9 +108,9 @@ jobs:
           else
             echo "publishing pbmockx@$version"
             if ! npm publish --provenance; then
-              echo "::error::npm publish failed. Configure ONE of:"
-              echo "::error::  1) trusted publishing: npm trust github pbmockx --file release.yml --repo $GITHUB_REPOSITORY --allow-publish"
-              echo "::error::  2) repository secret NPM_TOKEN (granular token with publish rights for pbmockx)"
+              echo "::error::npm publish failed. Trusted publishing must be configured for this repo:"
+              echo "::error::  npm trust github pbmockx --file release.yml --repo $GITHUB_REPOSITORY --allow-publish"
+              echo "::error::  ...and 'Allowed actions' on npmjs.com must include 'npm publish'."
               exit 1
             fi
           fi
