@@ -4,6 +4,8 @@
 [![node](https://img.shields.io/node/v/pbmockx.svg?label=node&logo=node.js)](https://www.npmjs.com/package/pbmockx)
 [![license](https://img.shields.io/npm/l/pbmockx.svg?label=license)](LICENSE)
 
+[English](README.en.md) · 中文
+
 **自带抓包、Mock 与 Web UI 的 protobuf / JSON 调试工具** —— 不再依赖 whistle。
 
 pbmockx 在本机启动一个 HTTP/HTTPS 代理，自动识别 Charles 风格的自描述 protobuf

@@ -188,4 +188,6 @@ workflow 的硬校验：`npm -v >= 11.5.1`（trusted publishing 要求）、`VER
 
 **npm 包内容由 `package.json#files` 白名单决定**（`bin/ dist/ web/ skill/ VERSION rules.yaml.example CHANGELOG.md`）。运行时依赖 `packageRoot()` 找 `<root>/VERSION`、`<root>/web`、`<root>/skill/SKILL.md`，所以这三样在 npm 安装下也必须存在——新增运行时资源目录时同步加进 `files`。`dist/` 在 `.gitignore` 里（npm 无 `.npmignore` 时会回退用 `.gitignore`），因此靠 `prepack: npm run build` 生成；`prepublishOnly: npm test` 保证发布前测试通过。`dist/tests/` 用 `!dist/tests/` 排除。`pbmockx fix` 需要 `tsconfig.json`，npm 安装下会提示改用 `npm i -g pbmockx@latest`。
 
+**README 双语**：`README.md`（中文）与 `README.en.md`（英文）必须同步修改，两篇顶部各有语言互链；npm 会无条件带上所有 `README*` 文件（无需加进 `files`），所以英文版也会出现在 npm 页面。
+
 **npm 12 的 staged publishing 会发一个 `0.0.0-stage`**：账号开了 2FA 时 `npm publish` 会先发布 `0.0.0-stage` stub（带 `"stub": true`，内容只有一个占位 package.json）占住包名，真正版本等浏览器确认后才上传。stub 不参与 `latest`、不影响 `npm i -g pbmockx`；中途中断会把它留下，用 `npm unpublish pbmockx@0.0.0-stage`（同样要过 2FA）清掉。看到这个名字不是 `package.json` 被改坏了。
