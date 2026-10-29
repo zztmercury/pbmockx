@@ -153,6 +153,13 @@ body.resizing .splitter::after { background: var(--accent); opacity: 1; }
   text-transform: uppercase; letter-spacing: .06em;
 }
 .legend { display: flex; align-items: center; gap: 4px; text-transform: none; letter-spacing: 0; }
+
+/* CJK: uppercase and wide letter-spacing look wrong around Chinese copy
+   ("3 / 3 个 FLOW"). Keep the small-caps treatment for Latin only. */
+html[lang^="zh"] .list-head,
+html[lang^="zh"] .section h4,
+html[lang^="zh"] .field label,
+html[lang^="zh"] .tag { text-transform: none; letter-spacing: 0; }
 .seg.mini { border-radius: 6px; }
 .seg.mini button { padding: 3px 7px; font-size: 10.5px; }
 .icon-btn.tiny { width: 22px; height: 22px; font-size: 12px; }

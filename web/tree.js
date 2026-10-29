@@ -1,6 +1,8 @@
 // Interactive renderers for protobuf field trees and JSON values.
 // Zero dependencies; children are built lazily to keep large payloads fast.
 
+import { t } from './i18n.js';
+
 export function el(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -55,7 +57,7 @@ function renderField(f, depth, initialExpanded) {
 
   if (f.kind === 'scalar') {
     if (f.value === null || f.value === undefined) {
-      row.appendChild(el('span', 'unset', '(unset)'));
+      row.appendChild(el('span', 'unset', t('tree.unset')));
     } else if (typeof f.value === 'string') {
       row.appendChild(el('span', 'fval str', '= ' + JSON.stringify(f.value)));
     } else if (typeof f.value === 'boolean') {
@@ -65,20 +67,20 @@ function renderField(f, depth, initialExpanded) {
     }
   } else if (f.kind === 'enum') {
     if (f.rawValue === null || f.rawValue === undefined) {
-      row.appendChild(el('span', 'unset', '(unset)'));
+      row.appendChild(el('span', 'unset', t('tree.unset')));
     } else {
       row.appendChild(el('span', 'fval enum', '= ' + f.rawValue + (f.value && f.value !== f.rawValue ? ' (' + f.value + ')' : '')));
     }
   } else if (f.kind === 'bytes') {
-    if (!f.value) row.appendChild(el('span', 'unset', '(unset)'));
+    if (!f.value) row.appendChild(el('span', 'unset', t('tree.unset')));
     else row.appendChild(el('span', 'fval bytes', '= ' + f.value.slice(0, 72) + (f.value.length > 72 ? '…' : '') + ' (' + (f.rawValue || 0) + 'B)'));
   } else if (f.kind === 'message') {
-    if (!hasChildren(f)) row.appendChild(el('span', 'unset', '(unset)'));
+    if (!hasChildren(f)) row.appendChild(el('span', 'unset', t('tree.unset')));
   } else if (f.kind === 'any') {
-    if (!hasChildren(f)) row.appendChild(el('span', 'unset', '(unset)'));
+    if (!hasChildren(f)) row.appendChild(el('span', 'unset', t('tree.unset')));
   } else if (f.kind === 'repeated' || f.kind === 'map') {
     const n = (f.items || []).length;
-    row.appendChild(el('span', 'fval num', '= ' + n + (f.kind === 'map' ? ' entries' : ' items')));
+    row.appendChild(el('span', 'fval num', '= ' + t(f.kind === 'map' ? 'tree.entries' : 'tree.items', { n })));
   }
 
   node.appendChild(row);
@@ -119,7 +121,7 @@ export function renderPbTree(container, tree) {
     wrap.appendChild(el('div', 'msg-head', t.messageType || (Array.isArray(tree) ? 'message[' + i + ']' : 'message')));
     const fields = t.fields || [];
     if (!fields.length) {
-      wrap.appendChild(el('div', 'body-empty', 'empty message'));
+      wrap.appendChild(el('div', 'body-empty', t('tree.emptyMessage')));
       continue;
     }
     for (const f of fields) wrap.appendChild(renderField(f, 0, true));
@@ -189,7 +191,7 @@ function renderJsonNode(key, value, depth, initialExpanded) {
 export function renderJsonTree(container, value) {
   container.innerHTML = '';
   if (value === null || value === undefined) {
-    container.appendChild(el('div', 'body-empty', '(empty)'));
+    container.appendChild(el('div', 'body-empty', t('tree.empty')));
     return;
   }
   if (typeof value !== 'object') {

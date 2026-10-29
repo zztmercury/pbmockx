@@ -16,10 +16,13 @@ import {
   localAddresses,
   packageRoot,
   paths,
+  readConfigFile,
   readVersion,
   resolveHost,
   resolvePort,
 } from '../core/config';
+import { normalizeLang } from '../core/lang';
+import { initLang, t, type MsgKey } from '../i18n';
 import { client, health, ApiClient } from './api';
 import {
   _buildPatchRule,
@@ -167,7 +170,12 @@ async function cmdRules(args: string[]): Promise<void> {
     const parsed = _parseRulesAddArgs(args.slice(1));
     const rule = _buildPatchRule(parsed);
     const result = await client().post('/rules', rule);
-    console.log('Rule added:', result.rule.id, result.rule.url_pattern, result.rule.path, '=>', _renderRuleValue(result.rule, parsed.action));
+    console.log(t('rules.added', {
+      id: result.rule.id,
+      url: result.rule.url_pattern,
+      path: result.rule.path,
+      value: _renderRuleValue(result.rule, parsed.action),
+    }));
     return;
   }
   if (sub === 'list') {
@@ -198,17 +206,17 @@ async function cmdRules(args: string[]): Promise<void> {
     const id = positionals(args.slice(1))[0];
     if (!id) usageError('Usage: pbmockx rules del <id>');
     const result = await client().del('/rules/' + encodeURIComponent(id));
-    console.log('Deleted:', result.ok);
+    console.log(t('rules.deleted', { ok: result.ok }));
     return;
   }
   if (sub === 'save') {
     const result = await client().post('/rules/save', {});
-    console.log('Saved:', result.ok);
+    console.log(t('rules.saved', { ok: result.ok }));
     return;
   }
   if (sub === 'reload') {
     const result = await client().post('/rules/reload', {});
-    console.log('Reloaded:', result.reloaded, 'rules');
+    console.log(t('rules.reloaded', { count: result.reloaded }));
     return;
   }
   help.helpRules();
@@ -227,20 +235,20 @@ async function cmdMapLocal(args: string[]): Promise<void> {
     const status = flagValue(args, '--status');
     const rule: any = { type: 'map_local', url_pattern: url };
     if (dataRaw !== undefined) {
-      try { rule.data = JSON.parse(dataRaw); } catch (e: any) { usageError('--data must be valid JSON: ' + e.message); }
+      try { rule.data = JSON.parse(dataRaw); } catch (e: any) { usageError(t('error.dataInvalidJson', { message: e.message })); }
       rule.source = 'data';
     } else if (filePath) {
       rule.file_path = filePath;
       rule.source = 'file';
     } else {
-      usageError('Either --data or --file is required');
+      usageError(t('error.dataOrFile'));
     }
     if (desc) rule.desc = desc;
     if (messageType) rule.messageType = messageType;
     if (args.includes('--delimited')) rule.delimited = true;
     if (status) rule.status = parseInt(status, 10);
     const result = await client().post('/map-local', rule);
-    console.log('Map local added:', result.rule.id, result.rule.url_pattern);
+    console.log(t('mapLocal.added', { id: result.rule.id, url: result.rule.url_pattern }));
     return;
   }
   if (sub === 'list') {
@@ -258,7 +266,7 @@ async function cmdMapLocal(args: string[]): Promise<void> {
     const id = positionals(args.slice(1))[0];
     if (!id) usageError('Usage: pbmockx map-local del <id>');
     const result = await client().del('/rules/' + encodeURIComponent(id));
-    console.log('Deleted:', result.ok);
+    console.log(t('rules.deleted', { ok: result.ok }));
     return;
   }
   help.helpMapLocal();
@@ -274,7 +282,11 @@ async function cmdMapRemote(args: string[]): Promise<void> {
     if (!url || !replacement) usageError('Usage: pbmockx map-remote add <url> <replacement> [--regex]');
     const rule = { type: 'map_remote', url_pattern: url, replacement, is_regex: args.includes('--regex') };
     const result = await client().post('/rules', rule);
-    console.log('Map remote added:', result.rule.id, result.rule.url_pattern, '=>', result.rule.replacement);
+    console.log(t('mapRemote.added', {
+      id: result.rule.id,
+      url: result.rule.url_pattern,
+      replacement: result.rule.replacement,
+    }));
     return;
   }
   if (sub === 'list') {
@@ -292,7 +304,7 @@ async function cmdMapRemote(args: string[]): Promise<void> {
     const id = positionals(args.slice(1))[0];
     if (!id) usageError('Usage: pbmockx map-remote del <id>');
     const result = await client().del('/rules/' + encodeURIComponent(id));
-    console.log('Deleted:', result.ok);
+    console.log(t('rules.deleted', { ok: result.ok }));
     return;
   }
   help.helpMapRemote();
@@ -302,7 +314,7 @@ async function cmdWeb(args: string[]): Promise<void> {
   if (hasHelp(args)) { help.helpWeb(); return; }
   const port = resolvePort();
   const url = 'http://' + resolveHost() + ':' + port + '/';
-  console.log('Opening', url);
+  console.log(t('web.opening', { url }));
   openUrl(url);
 }
 
@@ -316,7 +328,7 @@ async function cmdConnectAndroid(args: string[]): Promise<void> {
     const next = args[wifiIdx + 1];
     wifiHost = next && !next.startsWith('-') ? next : (localAddresses()[0] || null);
     if (!wifiHost) {
-      console.error('Error: no non-internal IPv4 address found for --wifi; pass an explicit host.');
+      console.error('Error: ' + t('connect.noLanIp'));
       process.exit(1);
     }
   }
@@ -324,22 +336,22 @@ async function cmdConnectAndroid(args: string[]): Promise<void> {
   if (!serial) {
     const devices = listDevices();
     if (devices === null) {
-      console.error('Error: adb not available. Install platform-tools and ensure adb is in PATH.');
+      console.error('Error: ' + t('connect.adbMissing'));
       process.exit(1);
     }
     if (devices.length === 0) {
-      console.error('Error: no adb device connected. Connect a device with USB debugging on.');
+      console.error('Error: ' + t('connect.noDevice'));
       process.exit(1);
     }
     if (devices.length > 1) {
-      console.error('Error: ' + devices.length + ' adb devices connected — specify one with -s <serial>.');
-      console.error('Available devices:');
-      for (const d of devices) console.error('  ' + d.serial + ' (' + d.state + ')');
+      console.error('Error: ' + t('connect.multipleDevices', { count: devices.length }));
+      console.error(t('connect.availableDevices'));
+      for (const d of devices) console.error(t('connect.deviceEntry', { serial: d.serial, state: d.state }));
       process.exit(1);
     }
     if (devices[0].state !== 'device') {
-      console.error('Error: device ' + devices[0].serial + ' is ' + devices[0].state + ' (not ready).');
-      console.error('Authorize the RSA fingerprint on the device, or reconnect and retry.');
+      console.error('Error: ' + t('connect.deviceNotReady', { serial: devices[0].serial, state: devices[0].state }));
+      console.error(t('connect.authorizeRsa'));
       process.exit(1);
     }
   }
@@ -348,189 +360,248 @@ async function cmdConnectAndroid(args: string[]): Promise<void> {
     const full = (serial ? 'adb -s ' + serial + ' ' : 'adb ') + cmd;
     console.log('[exec] ' + full);
     try { execSync(full, { stdio: 'pipe' }); return true; }
-    catch (e: any) { console.error('  failed: ' + String(e.message).split('\n')[0]); return false; }
+    catch (e: any) { console.error('  ' + t('connect.execFailed', { message: String(e.message).split('\n')[0] })); return false; }
   };
 
-  console.log('=== Step 1: Configure proxy (executed) ===');
+  console.log(t('connect.step1'));
   if (wifiHost) {
-    console.log('Wi-Fi mode: using ' + wifiHost + ':' + port + ' (no adb reverse)');
+    console.log(t('connect.wifiMode', { host: wifiHost, port }));
     adbExec('shell settings put global http_proxy ' + wifiHost + ':' + port);
   } else {
     adbExec('reverse tcp:' + port + ' tcp:' + port);
     adbExec('shell settings put global http_proxy 127.0.0.1:' + port);
   }
 
-  console.log('\n=== Step 2: Detect status (read-only) ===');
+  console.log('\n' + t('connect.step2'));
   const proxy = detectProxy(serial, port);
-  console.log('Proxy: ' + proxy.state + (proxy.raw ? ' [' + proxy.raw + ']' : '') +
-    (proxy.state === 'mismatch' ? ' (expected ' + proxy.expected + ')' : ''));
+  const proxyRaw = proxy.raw ? ' [' + proxy.raw + ']' : '';
+  const proxyExpected = proxy.state === 'mismatch' ? t('connect.proxyExpected', { expected: proxy.expected }) : '';
+  console.log(t('connect.proxy', { state: proxy.state, raw: proxyRaw, expected: proxyExpected }));
 
   const p = paths();
   let cert: any = null;
   let certState = 'unknown';
   if (!fs.existsSync(p.caCertFile)) {
-    console.log('Cert status:   unknown (CA not generated yet — run: pbmockx start)');
+    console.log(t('connect.certStatusNoCa'));
   } else {
     try {
       const pem = fs.readFileSync(p.caCertFile, 'utf-8');
       const hash = subjectHashOld(pem);
-      console.log('CA hash: ' + hash);
+      console.log(t('connect.caHash', { hash }));
       cert = detectCert(serial, hash);
       certState = cert.state;
       const sysHit = cert.system.find((d: any) => d.found);
       const usrHit = cert.user.find((d: any) => d.found);
       const sysDenied = cert.system.some((d: any) => d.denied);
-      console.log('Cert (system): ' + (sysHit ? 'found @ ' + sysHit.dir : (sysDenied ? 'cannot check (permission denied)' : 'not found')));
-      console.log('Cert (user):   ' + (usrHit ? 'found @ ' + usrHit.dir : (cert.root ? 'not found' : 'requires root (su) to check')));
-      console.log('Cert status:   ' + certState);
+      console.log(t('connect.certSystem', {
+        status: sysHit
+          ? t('connect.certFoundAt', { dir: sysHit.dir })
+          : (sysDenied ? t('connect.certPermissionDenied') : t('connect.certNotFound')),
+      }));
+      console.log(t('connect.certUser', {
+        status: usrHit
+          ? t('connect.certFoundAt', { dir: usrHit.dir })
+          : (cert.root ? t('connect.certNotFound') : t('connect.certRequiresRoot')),
+      }));
+      console.log(t('connect.certStatus', { state: certState }));
     } catch (e: any) {
-      console.log('Cert status:   unknown (CA read failed: ' + e.message + ')');
+      console.log(t('connect.certReadFailed', { message: e.message }));
     }
   }
 
   if (certState === 'user') {
-    console.log('\n  WARNING: installed as USER certificate.');
-    console.log('  Android 7+ apps (targetSdk>=24) do NOT trust user certs by default.');
-    console.log('  Install as a SYSTEM cert (root / Magisk / emulator) or configure');
-    console.log('  networkSecurityConfig in the app.');
+    console.log('\n' + t('connect.warnUserTitle'));
+    console.log(t('connect.warnUserBody1'));
+    console.log(t('connect.warnUserBody2'));
+    console.log(t('connect.warnUserBody3'));
   } else if (certState === 'not_found') {
-    console.log('\n  Manual steps to install (NOT executed by this command):');
-    console.log('  1. Download: http://' + (wifiHost || '127.0.0.1') + ':' + port + '/__pbmockx/api/ca.pem');
-    console.log('  2. adb push ' + p.caCertFile + ' /sdcard/pbmockx-ca.crt');
-    console.log('  3. Settings > Security > Encryption & credentials > Install from storage');
-    console.log('  Re-run: pbmockx connect-android' + (serial ? ' -s ' + serial : '') + '  (after install)');
+    console.log('\n' + t('connect.manualTitle'));
+    console.log(t('connect.manualStep1', { host: wifiHost || '127.0.0.1', port }));
+    console.log(t('connect.manualStep2', { file: p.caCertFile }));
+    console.log(t('connect.manualStep3'));
+    console.log(t('connect.rerun', { serial: serial ? ' -s ' + serial : '' }));
   } else if (certState === 'unknown') {
-    console.log('\n  Cannot automatically confirm cert status:');
+    console.log('\n' + t('connect.unknownTitle'));
     if (!cert || !cert.root) {
-      console.log('  - System cert: not installed');
-      console.log('  - User cert:   cannot check without root (su) — the user-cert');
-      console.log('    directory is protected by SELinux on non-root devices.');
+      console.log(t('connect.unknownSystemCert'));
+      console.log(t('connect.unknownUserCert1'));
+      console.log(t('connect.unknownUserCert2'));
     } else {
-      console.log('  (permission denied or device offline)');
+      console.log(t('connect.unknownOffline'));
     }
-    console.log('  Verify manually: Settings > Security > Encryption & credentials >');
-    console.log('    Trusted credentials > User tab (look for "pbmockx local CA").');
-    console.log('  Note: a USER cert is NOT trusted by apps targeting Android 7+ unless');
-    console.log('  the app uses networkSecurityConfig. For reliable HTTPS capture, install');
-    console.log('  as a SYSTEM cert (root / Magisk) or use an emulator.');
+    console.log(t('connect.unknownVerify1'));
+    console.log(t('connect.unknownVerify2'));
+    console.log(t('connect.unknownNote1'));
+    console.log(t('connect.unknownNote2'));
+    console.log(t('connect.unknownNote3'));
   } else if (certState === 'system') {
-    console.log('\n  Cert installed as SYSTEM certificate — apps should trust it.');
+    console.log('\n' + t('connect.systemOk'));
   }
+}
+
+type CheckStatus = 'OK' | 'WARN' | 'FAIL';
+
+/**
+ * `--json` is a machine contract, so doctor rows keep canonical English
+ * `name`/`detail` values; `label`/`text` are only used by the text listing.
+ */
+interface DoctorRow {
+  name: string;
+  status: CheckStatus;
+  detail: string;
+  label: string;
+  text: string;
+}
+
+/**
+ * `src/cli/api.ts` (outside the i18n scope) emits one fixed English
+ * connection-refused message. Recognise it so the CLI can translate it, without
+ * touching anything else. Returns the port, or null for unrelated errors.
+ */
+function daemonDownPort(message: string): number | null {
+  const m = /^pbmockx daemon is not running on 127\.0\.0\.1:(\d+)\. Run: pbmockx start$/.exec(message);
+  return m ? Number(m[1]) : null;
 }
 
 async function cmdDoctor(args: string[]): Promise<void> {
   if (hasHelp(args)) { help.helpDoctor(); return; }
   const p = paths();
   const port = resolvePort(p);
-  const rows: Array<{ name: string; status: 'OK' | 'WARN' | 'FAIL'; detail: string }> = [];
-  const add = (name: string, status: 'OK' | 'WARN' | 'FAIL', detail: string) => rows.push({ name, status, detail });
+  const rows: DoctorRow[] = [];
+  const add = (name: string, labelKey: MsgKey, status: CheckStatus, detail: string, text = detail) =>
+    rows.push({ name, status, detail, label: t(labelKey), text });
 
   const major = parseInt(process.versions.node.split('.')[0], 10);
-  add('node', major >= 18 ? 'OK' : 'FAIL', process.version + (major >= 18 ? '' : ' (need >= 18)'));
+  add('node', 'doctor.name.node', major >= 18 ? 'OK' : 'FAIL',
+    process.version + (major >= 18 ? '' : ' (need >= 18)'),
+    process.version + (major >= 18 ? '' : t('doctor.nodeNeed')));
 
   try {
     fs.mkdirSync(p.dataDir, { recursive: true });
     const probe = path.join(p.dataDir, '.doctor-probe');
     fs.writeFileSync(probe, 'ok');
     fs.unlinkSync(probe);
-    add('data dir', 'OK', p.dataDir);
+    add('data dir', 'doctor.name.dataDir', 'OK', p.dataDir);
   } catch (e: any) {
-    add('data dir', 'FAIL', p.dataDir + ' — ' + e.message);
+    add('data dir', 'doctor.name.dataDir', 'FAIL', p.dataDir + ' — ' + e.message);
   }
 
-  add('CA', fs.existsSync(p.caCertFile) ? 'OK' : 'WARN', fs.existsSync(p.caCertFile) ? p.caCertFile : 'not generated yet (run: pbmockx start)');
+  const hasCa = fs.existsSync(p.caCertFile);
+  add('CA', 'doctor.name.ca', hasCa ? 'OK' : 'WARN',
+    hasCa ? p.caCertFile : 'not generated yet (run: pbmockx start)',
+    hasCa ? p.caCertFile : t('doctor.caPending'));
 
   let info: any = null;
   try {
     info = await health(port, resolveHost(p));
-    add('daemon', 'OK', `http://127.0.0.1:${port} | flows: ${info.flow_count} | rules: ${info.rules}`);
-    if (info.flow_count === 0) add('traffic', 'WARN', 'no flows captured yet — configure the proxy and trigger a request');
+    add('daemon', 'doctor.name.daemon', 'OK',
+      `http://127.0.0.1:${port} | flows: ${info.flow_count} | rules: ${info.rules}`);
+    if (info.flow_count === 0) {
+      add('traffic', 'doctor.name.traffic', 'WARN',
+        'no flows captured yet — configure the proxy and trigger a request',
+        t('doctor.trafficWarn'));
+    }
   } catch (e: any) {
-    add('daemon', 'FAIL', e.message);
-    add('fix', 'WARN', 'run: pbmockx fix');
+    const message = e && e.message ? String(e.message) : String(e);
+    const downPort = daemonDownPort(message);
+    add('daemon', 'doctor.name.daemon', 'FAIL', message,
+      downPort === null ? message : t('doctor.daemonDown', { port: downPort }));
+    add('fix', 'doctor.name.fix', 'WARN', 'run: pbmockx fix', t('doctor.fixHint'));
   }
 
   try {
     const w2 = execSync('w2 --version', { stdio: 'pipe', timeout: 3000 }).toString().trim();
-    add('legacy whistle', 'WARN', `${w2} installed — pbmockx no longer uses it; stop it if it occupies port ${port}`);
+    add('legacy whistle', 'doctor.name.legacy', 'WARN',
+      `${w2} installed — pbmockx no longer uses it; stop it if it occupies port ${port}`,
+      t('doctor.legacyInstalled', { version: w2, port }));
   } catch {
-    add('legacy whistle', 'OK', 'not installed');
+    add('legacy whistle', 'doctor.name.legacy', 'OK', 'not installed', t('doctor.legacyAbsent'));
   }
 
   const skillTargets = [
     path.join(os.homedir(), '.agents/skills/pbmockx'),
     path.join(os.homedir(), '.claude/skills/pbmockx'),
   ];
-  for (const t of skillTargets) {
-    const short = t.replace(os.homedir(), '~');
+  for (const dir of skillTargets) {
+    const short = dir.replace(os.homedir(), '~');
     try {
-      const st = fs.lstatSync(t);
-      if (!st.isSymbolicLink()) add('skill', 'WARN', short + ' is not a symlink (run: pbmockx skill install)');
-      else if (fs.existsSync(path.join(t, 'SKILL.md'))) add('skill', 'OK', short + ' -> ' + fs.readlinkSync(t));
-      else add('skill', 'WARN', short + ' broken -> ' + fs.readlinkSync(t));
+      const st = fs.lstatSync(dir);
+      if (!st.isSymbolicLink()) {
+        add('skill', 'doctor.name.skill', 'WARN',
+          short + ' is not a symlink (run: pbmockx skill install)',
+          t('doctor.skillNotSymlink', { path: short }));
+      } else if (fs.existsSync(path.join(dir, 'SKILL.md'))) {
+        add('skill', 'doctor.name.skill', 'OK', short + ' -> ' + fs.readlinkSync(dir),
+          t('doctor.skillOk', { path: short, target: fs.readlinkSync(dir) }));
+      } else {
+        add('skill', 'doctor.name.skill', 'WARN', short + ' broken -> ' + fs.readlinkSync(dir),
+          t('doctor.skillBroken', { path: short, target: fs.readlinkSync(dir) }));
+      }
     } catch {
-      add('skill', 'WARN', short + ' not installed (run: pbmockx skill install)');
+      add('skill', 'doctor.name.skill', 'WARN', short + ' not installed (run: pbmockx skill install)',
+        t('doctor.skillMissing', { path: short }));
     }
   }
 
   if (args.includes('--json')) {
-    console.log(JSON.stringify({ version: readVersion(p), port, checks: rows }, null, 2));
+    const checks = rows.map(({ name, status, detail }) => ({ name, status, detail }));
+    console.log(JSON.stringify({ version: readVersion(p), port, checks }, null, 2));
     return;
   }
 
   console.log('=== pbmockx doctor ===');
-  console.log('version:', readVersion(p));
+  console.log(t('doctor.version', { version: readVersion(p) }));
   for (const r of rows) {
     const tag = r.status === 'OK' ? '[ OK ]' : r.status === 'WARN' ? '[WARN]' : '[FAIL]';
-    console.log(`${tag} ${r.name}: ${r.detail}`);
+    console.log(t('doctor.row', { tag, label: r.label, detail: r.text }));
   }
   if (rows.some((r) => r.status === 'FAIL')) {
-    console.log('\nNext: pbmockx fix   (rebuild + restart + verify)');
+    console.log('\n' + t('doctor.next'));
   }
 }
 
 async function cmdFix(args: string[]): Promise<void> {
   if (hasHelp(args)) { help.helpFix(); return; }
   console.log('=== pbmockx fix ===');
-  console.log('[1/3] Building...');
+  console.log(t('fix.step1'));
   // `fix` rebuilds from source, which only exists in a git checkout. Installs
   // from npm ship compiled dist/ and no TypeScript sources.
   if (!fs.existsSync(path.join(ROOT, 'tsconfig.json'))) {
-    console.error('  this install has no TypeScript sources (installed from npm).');
-    console.error('  upgrade instead: npm i -g pbmockx@latest && pbmockx restart');
+    console.error('  ' + t('fix.noSources'));
+    console.error('  ' + t('fix.upgrade'));
     process.exit(1);
   }
   try {
     if (!fs.existsSync(path.join(ROOT, 'node_modules'))) {
-      console.log('  node_modules missing — installing dependencies...');
+      console.log('  ' + t('fix.installingDeps'));
       execSync('npm install', { cwd: ROOT, stdio: 'inherit' });
     }
     execSync('npx tsc -p tsconfig.json', { cwd: ROOT, stdio: 'inherit' });
-    console.log('  build OK');
+    console.log('  ' + t('fix.buildOk'));
   } catch (e: any) {
-    console.error('  build failed:', e.message);
+    console.error('  ' + t('fix.buildFailed', { message: e.message }));
     process.exit(1);
   }
 
-  console.log('[2/3] Restarting daemon...');
+  console.log(t('fix.step2'));
   const p = paths();
   const rt = (() => { try { return JSON.parse(fs.readFileSync(p.runtimeFile, 'utf-8')); } catch { return null; } })();
   try {
     if (rt) await cmdRestart({ dataDir: p.dataDir, port: rt.port });
     else await cmdStart({ dataDir: p.dataDir });
   } catch (e: any) {
-    console.error('  restart failed:', e.message);
+    console.error('  ' + t('fix.restartFailed', { message: e.message }));
     process.exit(1);
   }
 
-  console.log('[3/3] Verifying...');
+  console.log(t('fix.step3'));
   const ok = await waitForHealth(resolvePort(p), 10000, resolveHost(p));
   if (!ok) {
-    console.error('  daemon is not healthy. Last log lines:');
+    console.error('  ' + t('fix.notHealthy'));
     try { console.error(fs.readFileSync(p.logFile, 'utf-8').split('\n').slice(-20).join('\n')); } catch {}
     process.exit(1);
   }
-  console.log(`\nOK — daemon healthy | flows: ${ok.flow_count} | rules: ${ok.rules}`);
+  console.log('\n' + t('fix.ok', { flows: ok.flow_count, rules: ok.rules }));
 }
 
 function readSkillDoc(): string {
@@ -562,7 +633,7 @@ function cmdSkill(args: string[]): void {
   };
   if (sub === 'install') {
     if (!fs.existsSync(skillDir) || !fs.statSync(skillDir).isDirectory()) {
-      console.error('skill dir not found at', skillDir);
+      console.error(t('skill.dirMissing', { dir: skillDir }));
       process.exit(1);
     }
     for (const target of targets) {
@@ -570,9 +641,9 @@ function cmdSkill(args: string[]): void {
       cleanTarget(target);
       try {
         fs.symlinkSync(skillDir, target);
-        console.log('Installed:', target, '->', skillDir);
+        console.log(t('skill.installed', { target, source: skillDir }));
       } catch (e: any) {
-        console.error('Failed:', target, e.message);
+        console.error(t('skill.failed', { target, message: e.message }));
       }
     }
     return;
@@ -583,16 +654,18 @@ function cmdSkill(args: string[]): void {
       try {
         const st = fs.lstatSync(p);
         found = true;
-        console.log(st.isSymbolicLink() ? 'Found: ' + p + ' -> ' + fs.readlinkSync(p) : 'Found (not symlink): ' + p);
+        console.log(st.isSymbolicLink()
+          ? t('skill.found', { path: p, target: fs.readlinkSync(p) })
+          : t('skill.foundNotSymlink', { path: p }));
       } catch {}
     }
-    if (!found) console.log('(none)');
+    if (!found) console.log(t('render.none'));
     return;
   }
   if (sub === 'uninstall') {
     for (const p of targets) {
       cleanTarget(p);
-      console.log('Removed:', p);
+      console.log(t('skill.removed', { path: p }));
     }
     return;
   }
@@ -603,7 +676,7 @@ async function cmdVersion(args: string[]): Promise<void> {
   if (hasHelp(args)) { help.helpVersion(); return; }
   const p = paths();
   const ver = readVersion(p);
-  console.log('pbmockx', ver);
+  console.log(t('cli.version', { version: ver }));
   if (!args.includes('--check')) return;
   try {
     const data: any = await new Promise((resolve, reject) => {
@@ -620,38 +693,49 @@ async function cmdVersion(args: string[]): Promise<void> {
     });
     if (data && data.tag_name) {
       const latest = String(data.tag_name).replace(/^v/, '');
-      console.log(latest !== ver ? `Latest: ${latest} (update available)` : 'Up to date');
+      console.log(latest !== ver ? t('version.updateAvailable', { latest }) : t('version.upToDate'));
     }
   } catch (e: any) {
-    console.log('Remote check failed:', e.message);
+    console.log(t('version.checkFailed', { message: e.message }));
   }
 }
 
 // --- dispatcher ---
 
-function stripGlobal(argv: string[]): string[] {
+/**
+ * Consume global flags (`--data-dir`, `--lang`) before dispatch so subcommands
+ * never see them. Both `--flag value` and `--flag=value` are accepted, and the
+ * flags may appear anywhere on the command line.
+ */
+function stripGlobal(argv: string[]): { argv: string[]; lang?: string } {
   const out: string[] = [];
+  let lang: string | undefined;
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--data-dir') {
+    const arg = argv[i];
+    if (arg === '--data-dir') {
       if (argv[i + 1]) {
         process.env.PBMOCKX_DATA_DIR = path.resolve(argv[i + 1]);
         i++;
       }
       continue;
     }
-    out.push(argv[i]);
+    if (arg === '--lang') {
+      if (argv[i + 1]) {
+        lang = argv[i + 1];
+        i++;
+      }
+      continue;
+    }
+    if (arg.startsWith('--lang=')) {
+      lang = arg.slice('--lang='.length);
+      continue;
+    }
+    out.push(arg);
   }
-  return out;
+  return { argv: out, lang };
 }
 
-export async function main(argv: string[]): Promise<void> {
-  argv = stripGlobal(argv);
-  const [cmd, ...args] = argv;
-  if (!cmd || cmd === '-h' || cmd === '--help') {
-    help.helpMain();
-    return;
-  }
-
+async function dispatch(cmd: string, args: string[]): Promise<void> {
   switch (cmd) {
     case 'flows': await cmdFlows(args); return;
     case 'decode': await cmdDecode(args); return;
@@ -714,9 +798,39 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     default:
-      console.error('Unknown command:', cmd);
-      console.log('Run: pbmockx --help');
+      console.error(t('error.unknownCommand', { command: cmd }));
+      console.log(t('error.runHelp'));
       process.exit(1);
+  }
+}
+
+export async function main(argv: string[]): Promise<void> {
+  const global = stripGlobal(argv);
+  argv = global.argv;
+  const langFlag = global.lang;
+  // Setting PBMOCKX_LANG also propagates to the daemon spawned by `start`, so
+  // the CLI and the daemon (and therefore the Web UI) agree on one language.
+  if (langFlag) process.env.PBMOCKX_LANG = normalizeLang(langFlag) || 'en';
+  initLang({ explicit: langFlag, config: readConfigFile(paths()) });
+
+  const [cmd, ...args] = argv;
+  if (!cmd || cmd === '-h' || cmd === '--help') {
+    help.helpMain();
+    return;
+  }
+
+  try {
+    await dispatch(cmd, args);
+  } catch (e: any) {
+    // Only the fixed "daemon not running" message from api.ts is rewritten;
+    // every other error keeps the exact previous behaviour (Error: + exit 1).
+    const message = e && e.message ? String(e.message) : String(e);
+    const downPort = daemonDownPort(message);
+    if (downPort !== null) {
+      console.error('Error: ' + t('error.daemonDown', { port: downPort }));
+      process.exit(1);
+    }
+    throw e;
   }
 }
 

@@ -75,6 +75,21 @@ and verifies the result.
 - **Upgrading from the whistle plugin**: run `w2 stop` first to free port 8899, then run the installer. On first start in the default data directory, old `whistle-plugin/rules.yaml` and `mock-data/` are imported automatically. The new CA must be trusted again on every device.
 - Uninstall: `./scripts/install.sh --uninstall`; add `--purge` to delete `~/.pbmockx` as well.
 
+## Language (English / 中文)
+
+The CLI and the web UI both speak English and Chinese, and **follow the system locale by default**
+(`zh*` → Chinese, everything else → English):
+
+```bash
+pbmockx --lang zh flows          # global flag, before or after the subcommand
+PBMOCKX_LANG=zh pbmockx doctor   # or via the environment
+```
+
+- Precedence: `--lang` > `PBMOCKX_LANG` > `"lang"` in `~/.pbmockx/config.json` > system locale > `en`.
+- `pbmockx start --lang zh` passes the default language to the daemon, so the web UI opens in Chinese.
+- The web UI has a 中文 / EN toggle in the top bar (remembered per browser); `?lang=zh` forces a language for one visit.
+- Machine-facing output never changes: `--json`, table headers, `=== Request ===` markers and `OK/WARN/FAIL` stay English.
+
 ## Quick start
 
 ```bash
@@ -186,7 +201,7 @@ The default data directory is `~/.pbmockx` (override with `PBMOCKX_DATA_DIR`):
 ```
 
 Common environment variables: `PBMOCKX_PORT`, `PBMOCKX_HOST`, `PBMOCKX_DATA_DIR`, `PBMOCKX_LAN`,
-`PBMOCKX_LOG_LEVEL`. The legacy `WHISTLE_PORT` is still honoured as a lowest-priority fallback.
+`PBMOCKX_LOG_LEVEL`, `PBMOCKX_LANG`. The legacy `WHISTLE_PORT` is still honoured as a lowest-priority fallback.
 
 Example config (`~/.pbmockx/config.json`):
 
@@ -194,6 +209,7 @@ Example config (`~/.pbmockx/config.json`):
 {
   "port": 8899,
   "host": "127.0.0.1",
+  "lang": "zh",
   "ui": { "lanAccess": true },
   "proxy": {
     "mitm": true,

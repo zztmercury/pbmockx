@@ -43,12 +43,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test \"dist/tests/**/*.test.js\"",
+    "test": "npm run build && node scripts/check-i18n.js && node --test \"dist/tests/**/*.test.js\"",
     "dev": "tsc -p tsconfig.json -w",
     "start": "node bin/pbmockxd.js",
     "prepack": "npm run build",
     "prepublishOnly": "npm test",
-    "notes": "node scripts/changelog-notes.js"
+    "notes": "node scripts/changelog-notes.js",
+    "lint:i18n": "node scripts/check-i18n.js"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

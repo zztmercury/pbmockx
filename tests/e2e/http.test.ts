@@ -397,7 +397,10 @@ test('CLI keeps its command contract against the native daemon', async () => {
   // Async spawn is required: the daemon runs in this process, so a blocking
   // spawnSync would deadlock the HTTP request the CLI is making.
   const run = (args: string[]) => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
-    const child = spawn(process.execPath, [cli, '--data-dir', d.dir, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [cli, '--data-dir', d.dir, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PBMOCKX_LANG: 'en' },
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (c) => { stdout += c; });

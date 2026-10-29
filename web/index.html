@@ -16,16 +16,17 @@
       <span class="brand-name">pbmockx</span>
       <span class="ver" id="version"></span>
     </div>
-    <div class="conn" id="conn" title="daemon status"><span class="dot"></span><span id="conn-text">connecting</span></div>
+    <div class="conn" id="conn" title="daemon status" data-i18n-title="topbar.daemonStatus"><span class="dot"></span><span id="conn-text" data-i18n="conn.connecting">connecting</span></div>
     <div class="search-wrap">
-      <input id="filter" type="search" placeholder="Filter flows (regex or text)   /" autocomplete="off" spellcheck="false">
+      <input id="filter" type="search" placeholder="Filter flows (regex or text)   /" data-i18n-placeholder="list.filterPlaceholder" autocomplete="off" spellcheck="false">
     </div>
     <div class="actions">
-      <button id="btn-pause" class="btn" title="Pause live updates">Pause</button>
-      <button id="btn-clear" class="btn" title="Clear captured flows">Clear</button>
-      <button id="btn-rules" class="btn" title="Mock rules">Rules <span class="count" id="rules-count">0</span></button>
-      <button id="btn-setup" class="btn" title="Certificate and proxy setup">Setup</button>
-      <button id="btn-theme" class="btn icon" title="Toggle theme">◐</button>
+      <button id="btn-pause" class="btn" title="Pause live updates" data-i18n-title="nav.pauseTitle">Pause</button>
+      <button id="btn-clear" class="btn" title="Clear captured flows" data-i18n-title="nav.clearTitle" data-i18n="nav.clear">Clear</button>
+      <button id="btn-rules" class="btn" title="Mock rules" data-i18n-title="nav.rulesTitle"><span data-i18n="nav.rules">Rules</span> <span class="count" id="rules-count">0</span></button>
+      <button id="btn-setup" class="btn" title="Certificate and proxy setup" data-i18n-title="nav.setupTitle" data-i18n="nav.setup">Setup</button>
+      <button id="btn-lang" class="btn" data-i18n="lang.switch" data-i18n-title="lang.title" data-i18n-aria="lang.title">中文</button>
+      <button id="btn-theme" class="btn icon" title="Toggle theme" data-i18n-title="nav.themeTitle">◐</button>
     </div>
   </header>
 
@@ -34,33 +35,33 @@
       <div class="list-head">
         <span id="flow-count">0 flows</span>
         <span class="spacer"></span>
-        <div class="seg mini" id="list-mode" role="group" aria-label="List layout">
-          <button type="button" data-mode="flat">Flat</button>
-          <button type="button" data-mode="tree">Tree</button>
+        <div class="seg mini" id="list-mode" role="group" aria-label="List layout" data-i18n-aria="list.layoutAria">
+          <button type="button" data-mode="flat" data-i18n="list.flat">Flat</button>
+          <button type="button" data-mode="tree" data-i18n="list.tree">Tree</button>
         </div>
-        <button type="button" class="icon-btn tiny" id="tree-expand" title="Expand all groups" aria-label="Expand all groups">⊞</button>
-        <button type="button" class="icon-btn tiny" id="tree-collapse" title="Collapse all groups" aria-label="Collapse all groups">⊟</button>
+        <button type="button" class="icon-btn tiny" id="tree-expand" title="Expand all groups" aria-label="Expand all groups" data-i18n-title="list.expandAll" data-i18n-aria="list.expandAll">⊞</button>
+        <button type="button" class="icon-btn tiny" id="tree-collapse" title="Collapse all groups" aria-label="Collapse all groups" data-i18n-title="list.collapseAll" data-i18n-aria="list.collapseAll">⊟</button>
         <span class="legend"><i class="l-pb"></i>PB <i class="l-json"></i>JSON</span>
       </div>
-      <div id="flow-list" class="flow-list" role="listbox" aria-label="Captured flows"></div>
+      <div id="flow-list" class="flow-list" role="listbox" aria-label="Captured flows" data-i18n-aria="list.capturedAria"></div>
       <div id="empty-list" class="empty-list">
         <div class="empty-art">⌁</div>
-        <h3>Waiting for traffic</h3>
-        <p>Configure your device or app to use this proxy:</p>
+        <h3 data-i18n="list.empty.title">Waiting for traffic</h3>
+        <p data-i18n="list.empty.hint">Configure your device or app to use this proxy:</p>
         <code id="proxy-addr">127.0.0.1:8899</code>
-        <button class="btn small" id="btn-copy-proxy">Copy proxy address</button>
+        <button class="btn small" id="btn-copy-proxy" data-i18n="list.empty.copy">Copy proxy address</button>
       </div>
     </section>
 
     <div class="splitter" id="splitter" role="separator" aria-orientation="vertical"
-         aria-label="Resize flow list" title="Drag to resize the flow list" tabindex="0"></div>
+         aria-label="Resize flow list" title="Drag to resize the flow list" data-i18n-aria="list.splitterAria" data-i18n-title="list.splitterTitle" tabindex="0"></div>
 
     <section class="detail" id="detail">
       <div class="empty-detail" id="empty-detail">
         <div class="empty-art">⇢</div>
-        <h2>Select a flow</h2>
-        <p>Pick a request on the left to inspect its headers and decoded body.</p>
-        <p class="muted">Protobuf responses are shown as a typed field tree — no JSON conversion.</p>
+        <h2 data-i18n="detail.empty.title">Select a flow</h2>
+        <p data-i18n="detail.empty.hint">Pick a request on the left to inspect its headers and decoded body.</p>
+        <p class="muted" data-i18n="detail.empty.pbHint">Protobuf responses are shown as a typed field tree — no JSON conversion.</p>
       </div>
       <div id="detail-body" class="detail-body hidden"></div>
     </section>
@@ -71,7 +72,7 @@
 <aside class="drawer" id="drawer" aria-hidden="true">
   <div class="drawer-head">
     <div class="drawer-tabs" id="drawer-tabs"></div>
-    <button class="btn icon" id="btn-drawer-close" title="Close (Esc)">✕</button>
+    <button class="btn icon" id="btn-drawer-close" title="Close (Esc)" data-i18n-title="common.closeEsc">✕</button>
   </div>
   <div class="drawer-body" id="drawer-body"></div>
 </aside>

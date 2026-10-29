@@ -121,6 +121,15 @@ skill/SKILL.md  唯一面向用户的 agent 指南（`agent-doc` 打印）
 - 详情里的每个 block 必须用 `card()` 构建（不要手写 `.card`/`.card-head`），否则拿不到折叠开关、`aria-expanded` 和折叠状态持久化；`card()` 的 body 是懒构建的（折叠时不解码，展开才执行 builder），`Request/Response body` 的 raw 抓取也在 builder 里。
 - 安全：`static.ts` 下发 CSP（self + inline style），无外链/CDN；管理面访问控制（loopback / `ui.lanAccess` / CA 下载例外）在 daemon 层。
 
+## 国际化（i18n）
+
+- 语言 `en` / `zh`，解析顺序：`--lang` > `PBMOCKX_LANG` > `config.json {"lang"}` > 系统 locale（`LC_ALL`/`LC_MESSAGES`/`LANG`/`LANGUAGE`）> `en`。实现在 `src/core/lang.ts`。
+- **CLI 文案**：`src/i18n/en.ts` 用 `as const` 定义 key 并导出 `MsgKey`，`src/i18n/zh.ts` 是 `Record<MsgKey, string>`——加 key 不翻译 = `tsc` 报错。统一 `t('area.thing', { name })`，占位符 `{name}`。`help.ts` 的整段 help 也是 key（`help.*`）。
+- **Web 文案**：`web/i18n.js` 的 `dict.en` / `dict.zh`；静态节点用 `data-i18n` / `data-i18n-title` / `data-i18n-aria` / `data-i18n-placeholder`，动态节点渲染时调 `t()`。UI 零构建且 CSP 只允许 `script-src 'self'`，不能内联脚本、不能引 CDN。
+- **保持英文的机器契约**：`--json` 的 key/value、表格表头（`id method status proto url`）、`=== Request ===` 等分隔符、`OK/WARN/FAIL`、`patch_error:`/`decode_error:` 前缀、守护进程日志文件、HTTP 方法/头名、命令与参数名。
+- `--lang` 在 `main()` 里像 `--data-dir` 一样被消费掉，并写入 `process.env.PBMOCKX_LANG`；`pbmockx start` spawn 的守护进程因此继承同一语言，`/health` 返回的 `lang` 就是 Web UI 的默认语言。
+- 测试固定 `PBMOCKX_LANG=en`（`tests/helpers.ts` 与 e2e spawn 的 env），否则中文机器上断言全挂；`tests/unit/i18n.test.ts` 覆盖解析优先级、目录 key 对齐与 `--lang` 生效。
+
 ## 测试
 
 ```bash

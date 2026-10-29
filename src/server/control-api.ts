@@ -12,6 +12,7 @@ import * as path from 'path';
 
 import type { PbmockxConfig, PbmockxPaths } from '../core/config';
 import { localAddresses, readVersion } from '../core/config';
+import { resolveLangFromConfig } from '../core/lang';
 import type { CertAuthority } from '../proxy/ca';
 import type { FlowStore, FlowRecord } from '../core/flow-store';
 import type { PBEngine } from '../core/pb-engine';
@@ -196,6 +197,8 @@ function publicInfo(deps: ApiDeps): any {
     ca,
     startedAt: deps.startedAt,
     uptimeMs: Date.now() - deps.startedAt,
+    /** Default UI language (--lang / PBMOCKX_LANG / config.lang / system locale). */
+    lang: resolveLangFromConfig(deps.config),
     capture: deps.config.capture,
     proxy: {
       mitm: deps.config.proxy.mitm,
@@ -240,6 +243,8 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           flow_count: deps.flowStore.size(),
           rules: deps.rules.list().length,
           uptime: Date.now() - deps.startedAt,
+          // Default UI language (--lang / PBMOCKX_LANG / config.lang / system locale).
+          lang: resolveLangFromConfig(deps.config),
         });
         return true;
       }

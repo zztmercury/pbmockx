@@ -253,3 +253,4 @@ pbmockx version [--check]
 - 规则、mock 数据、CA、日志都在 `~/.pbmockx/`（`PBMOCKX_DATA_DIR` 可覆盖）。
 - 规则 ID 是 8 位 hex；`rules.yaml` 与旧 whistle 插件格式兼容（新增可选 `enabled`）。
 - 给人看的 UI：`pbmockx web`；给 agent 的机器输出：`--json`。
+- **输出语言**：CLI 文案跟随系统 locale（中文系统 → 中文），英文环境保持英文；解析输出请优先用 `--json`，或显式 `--lang en` 固定语言（`PBMOCKX_LANG` 同样生效）。表格表头、`=== Request ===` 分隔符、`OK/WARN/FAIL` 始终英文。

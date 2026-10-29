@@ -4,6 +4,7 @@
 
 import { renderTree, renderTreeCollapsed, navigatePath } from '../core/field-tree';
 import { TUNNEL_REASON_TEXT, type TunnelReason } from '../core/flow-store';
+import { t } from '../i18n';
 
 export function fmtBytes(n: number | undefined | null): string {
   if (!n) return '0 B';
@@ -19,19 +20,19 @@ export function fmtBytes(n: number | undefined | null): string {
  */
 export function printTunnel(d: any): void {
   const reason = TUNNEL_REASON_TEXT[d.tunnel as TunnelReason] || String(d.tunnel);
-  console.log('=== Tunnel (not decrypted) ===');
+  console.log(t('tunnel.header'));
   console.log('CONNECT ' + (d.url || ''));
-  console.log('reason: ' + reason);
-  if (d.error) console.log('error: ' + d.error);
-  console.log('bytes: up ' + fmtBytes(d.tunnelBytesUp) + '  down ' + fmtBytes(d.tunnelBytesDown));
-  if (d.tunnelClose) console.log('closed: ' + d.tunnelClose);
-  if (d.clientIp) console.log('client: ' + d.clientIp);
-  console.log('flow id: ' + d.id);
+  console.log(t('tunnel.reason', { reason }));
+  if (d.error) console.log(t('tunnel.error', { error: d.error }));
+  console.log(t('tunnel.bytes', { up: fmtBytes(d.tunnelBytesUp), down: fmtBytes(d.tunnelBytesDown) }));
+  if (d.tunnelClose) console.log(t('tunnel.closed', { by: d.tunnelClose }));
+  if (d.clientIp) console.log(t('tunnel.client', { ip: d.clientIp }));
+  console.log(t('tunnel.flowId', { id: d.id }));
 }
 
 export function printTable(rows: any[], headers?: string[]): void {
   if (!rows || rows.length === 0) {
-    console.log('(none)');
+    console.log(t('render.none'));
     return;
   }
   const keys = headers || Object.keys(rows[0]);
@@ -80,7 +81,7 @@ export function printSection(o: PrintSectionOptions): void {
     console.log('');
   }
   if (o.decodeError) {
-    console.log('(decode error: ' + o.decodeError + ')');
+    console.log(t('render.decodeError', { message: o.decodeError }));
   }
   if (o.body !== undefined && o.body !== null) {
     let label: string;
@@ -93,7 +94,7 @@ export function printSection(o: PrintSectionOptions): void {
     } else if (o.protocol === 'form') {
       const entries = Object.entries(o.body);
       if (!entries.length) {
-        console.log('(empty)');
+        console.log(t('render.empty'));
       } else {
         const maxKey = Math.max(...entries.map((e) => e[0].length));
         for (const [k, v] of entries) {
@@ -109,8 +110,8 @@ export function printSection(o: PrintSectionOptions): void {
           if (subtree) {
             console.log(renderTreeCollapsed(subtree));
           } else {
-            console.log('Path not found: ' + o.path);
-            console.log('Available top-level fields: ' + o.body.fields.map((f: any) => f.name).join(', '));
+            console.log(t('render.pathNotFound', { path: o.path }));
+            console.log(t('render.availableFields', { fields: o.body.fields.map((f: any) => f.name).join(', ') }));
           }
         } else {
           console.log(renderTreeCollapsed(o.body));

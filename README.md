@@ -71,6 +71,20 @@ PBMOCKX_REF=<branch-or-tag> \
 - **从旧版（whistle 插件）升级**：先 `w2 stop` 释放 8899，再执行安装脚本；首次在默认数据目录启动时会自动导入旧的 `whistle-plugin/rules.yaml` 和 `mock-data/`。新 CA 需要重新在各设备上信任。
 - 卸载：`./scripts/install.sh --uninstall`；`--purge` 同时删除 `~/.pbmockx` 数据。
 
+## 语言（中文 / English）
+
+CLI 与 Web UI 都支持中英文，**默认跟随系统语言**（`zh*` → 中文，其余 → 英文）：
+
+```bash
+pbmockx --lang zh flows          # 全局参数，可放在子命令之前或之后
+PBMOCKX_LANG=zh pbmockx doctor   # 或环境变量
+```
+
+- 优先级：`--lang` > `PBMOCKX_LANG` > `~/.pbmockx/config.json` 的 `"lang"` > 系统 locale > `en`。
+- `pbmockx start --lang zh` 会把默认语言一并带给守护进程，Web UI 打开即中文。
+- Web UI 顶栏有「中文 / EN」切换按钮，选择记在浏览器本地；也可用 `?lang=zh` 强制某次打开的语言。
+- 机器接口不受影响：`--json`、表格表头、`=== Request ===` 分隔符、`OK/WARN/FAIL` 始终英文。
+
 ## 快速开始
 
 ```bash
@@ -180,7 +194,7 @@ pbmockx connect-android [-s <serial>] [--wifi [host]]
 └─ logs/pbmockxd.log
 ```
 
-常用环境变量：`PBMOCKX_PORT`、`PBMOCKX_HOST`、`PBMOCKX_DATA_DIR`、`PBMOCKX_LAN`、`PBMOCKX_LOG_LEVEL`。旧变量 `WHISTLE_PORT` 仍作为最低优先级回退。
+常用环境变量：`PBMOCKX_PORT`、`PBMOCKX_HOST`、`PBMOCKX_DATA_DIR`、`PBMOCKX_LAN`、`PBMOCKX_LOG_LEVEL`、`PBMOCKX_LANG`。旧变量 `WHISTLE_PORT` 仍作为最低优先级回退。
 
 配置示例（`~/.pbmockx/config.json`）：
 
@@ -188,6 +202,7 @@ pbmockx connect-android [-s <serial>] [--wifi [host]]
 {
   "port": 8899,
   "host": "127.0.0.1",
+  "lang": "zh",
   "ui": { "lanAccess": true },
   "proxy": {
     "mitm": true,

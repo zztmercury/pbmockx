@@ -1,7 +1,13 @@
 // pbmockx Web UI — live flow list, request/response inspector, rules & setup.
 import { api } from './api.js';
+import { applyStatic, getLang, initLang, mountLangToggle, normalizeLang, setLang, t } from './i18n.js';
 import { el, fmtBytes, fmtDuration, renderPbTree, renderJsonTree } from './tree.js';
 import { renderRulesPanel, renderSetupPanel } from './panels.js';
+
+// Resolve the language before anything renders. Module scripts are deferred, so
+// the DOM is parsed here; ?lang= / the toggle choice / navigator decide now and
+// the daemon default from /health only fills in later.
+initLang();
 
 const $ = (sel) => document.querySelector(sel);
 const COLLAPSED_CARDS_KEY = 'pbmockx-collapsed-cards-v1';
@@ -20,6 +26,7 @@ const state = {
   info: null,
   ca: null,
   health: null,
+  conn: null,
   drawer: null,
   bodyCache: new Map(),
   detailTimer: null,
@@ -67,13 +74,13 @@ function toast(message, isError = false) {
 async function copyText(text) {
   try {
     await navigator.clipboard.writeText(text);
-    toast('Copied');
+    toast(t('common.copied'));
   } catch {
     const ta = document.createElement('textarea');
     ta.value = text;
     document.body.appendChild(ta);
     ta.select();
-    try { document.execCommand('copy'); toast('Copied'); } catch { toast('Copy failed', true); }
+    try { document.execCommand('copy'); toast(t('common.copied')); } catch { toast(t('common.copyFailed'), true); }
     ta.remove();
   }
 }
@@ -113,10 +120,17 @@ function splitFlowUrl(flow) {
   }
 }
 
-function setConn(ok, text) {
+function setConn(ok, key) {
+  state.conn = { ok, key: key || (ok ? 'conn.live' : 'conn.offline') };
   els.conn.classList.toggle('ok', !!ok);
   els.conn.classList.toggle('err', ok === false);
-  els.connText.textContent = text || (ok ? 'live' : 'offline');
+  els.connText.textContent = t(state.conn.key);
+}
+
+/** The Pause label follows app state, so it is not a data-i18n node. */
+function renderPauseLabel() {
+  const btn = $('#btn-pause');
+  if (btn) btn.textContent = state.paused ? t('nav.paused') : t('nav.pause');
 }
 
 // --- theme ---
@@ -180,7 +194,7 @@ async function openDrawer(tab) {
 
 async function renderDrawer() {
   els.drawerTabs.innerHTML = '';
-  for (const [key, label] of [['rules', 'Mock rules'], ['setup', 'Setup & CA']]) {
+  for (const [key, label] of [['rules', t('drawer.tabRules')], ['setup', t('drawer.tabSetup')]]) {
     const b = el('button', 'tab' + (state.drawer === key ? ' active' : ''), label);
     b.addEventListener('click', () => { state.drawer = key; renderDrawer(); updateHash(); });
     els.drawerTabs.appendChild(b);
@@ -264,13 +278,13 @@ function flowRow(f, depth = 0, basePath = '') {
   if (f.status) meta.appendChild(el('span', 'status ' + statusClass(f.status), String(f.status)));
   const p = protoTag(f.resProto || f.reqProto);
   if (p) meta.appendChild(p);
-  if (f.mocked) meta.appendChild(el('span', 'tag mock', 'mock'));
+  if (f.mocked) meta.appendChild(el('span', 'tag mock', t('list.tagMock')));
   if (f.upgrade) meta.appendChild(el('span', 'tag ws', 'ws'));
   if (f.tunnel) {
-    meta.appendChild(el('span', 'tag tunnel', 'tunnel'));
+    meta.appendChild(el('span', 'tag tunnel', t('list.tagTunnel')));
     meta.appendChild(el('span', '', '\u2191 ' + fmtBytes(f.tunnelBytesUp || 0) + '  \u2193 ' + fmtBytes(f.tunnelBytesDown || 0)));
   }
-  if (f.patchError || f.error) meta.appendChild(el('span', 'tag err', 'err'));
+  if (f.patchError || f.error) meta.appendChild(el('span', 'tag err', t('list.tagErr')));
   if (f.durationMs !== undefined && f.durationMs !== null) meta.appendChild(el('span', '', fmtDuration(f.durationMs)));
   if (f.resSize) meta.appendChild(el('span', '', fmtBytes(f.resSize)));
   meta.appendChild(el('span', 'spacer'));
@@ -285,7 +299,7 @@ function buildTree(list) {
   const hosts = new Map();
   for (const f of list) {
     const u = splitFlowUrl(f);
-    const hostName = u.host || '(unknown host)';
+    const hostName = u.host || t('tree.unknownHost');
     let h = hosts.get(hostName);
     if (!h) {
       h = {
@@ -324,10 +338,11 @@ function buildTree(list) {
 }
 
 function compareTreeLabel(a, b) {
-  // '(unknown host)' sinks to the bottom; otherwise case-insensitive with
-  // numeric collation so /item-2 sorts before /item-10.
-  const ua = a === '(unknown host)';
-  const ub = b === '(unknown host)';
+  // The unknown-host bucket sinks to the bottom; otherwise case-insensitive
+  // with numeric collation so /item-2 sorts before /item-10.
+  const unknown = t('tree.unknownHost');
+  const ua = a === unknown;
+  const ub = b === unknown;
   if (ua !== ub) return ua ? 1 : -1;
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
 }
@@ -355,7 +370,7 @@ function compressPathNode(node) {
 function hostRow(h, open) {
   const selectedInside = h.flows.some((f) => f.id === state.selectedId);
   const row = el('div', 'flow-row group-row host-row' + (selectedInside ? ' has-selected' : ''));
-  row.title = h.host + ' — ' + h.flows.length + ' request(s)';
+  row.title = t('tree.hostTitle', { host: h.host, n: h.flows.length });
   row.appendChild(el('span', 'disclosure', open ? '▾' : '▸'));
   row.appendChild(el('span', 'host-label', h.host));
   row.appendChild(el('span', 'count-badge', String(h.flows.length)));
@@ -382,7 +397,7 @@ function nodeHasSelected(node) {
 function pathGroupRow(host, node, depth, open) {
   const row = el('div', 'flow-row group-row endpoint-row' + (nodeHasSelected(node) ? ' has-selected' : ''));
   const count = nodeTotal(node);
-  row.title = host.host + (node.path || '/') + ' — ' + count + ' request(s)';
+  row.title = t('tree.pathTitle', { host: host.host, path: node.path || '/', n: count });
   row.style.paddingLeft = (12 + depth * 16) + 'px';
   row.appendChild(el('span', 'disclosure', open ? '▾' : '▸'));
   row.appendChild(el('span', 'path-label', node.path || '/'));
@@ -426,7 +441,7 @@ function renderTree(list) {
     for (const child of sortedChildren(h.root)) renderPathNode(h, child, 1, frag);
   }
   if (openHosts === 0 && list.length) {
-    frag.appendChild(el('div', 'tree-hint', 'Groups are collapsed — click a host to expand. Use ⊞ / ⊟ for everything.'));
+    frag.appendChild(el('div', 'tree-hint', t('list.treeHint')));
   }
   return frag;
 }
@@ -474,7 +489,7 @@ function renderFlows() {
 function paintFlows() {
   const list = visibleFlows();
   els.flowList.innerHTML = '';
-  els.flowCount.textContent = list.length + ' / ' + state.flows.length + ' flows';
+  els.flowCount.textContent = t('list.count', { shown: list.length, total: state.flows.length });
   const empty = state.flows.length === 0;
   els.emptyList.classList.toggle('show', empty);
   els.flowList.style.display = empty ? 'none' : '';
@@ -598,20 +613,20 @@ function renderDetail() {
   if (d.resProtocol) sub.appendChild(el('span', 'code ' + (d.resProtocol === 'protobuf' ? 'pb' : 'json'), d.resProtocol === 'protobuf' ? 'PB' : d.resProtocol.toUpperCase()));
   if (d.resMessageType) sub.appendChild(el('span', '', d.resMessageType));
   if (d.durationMs !== undefined) sub.appendChild(el('span', '', fmtDuration(d.durationMs)));
-  if (d.resSize) sub.appendChild(el('span', '', 'resp ' + fmtBytes(d.resSize)));
-  if (d.reqSize) sub.appendChild(el('span', '', 'req ' + fmtBytes(d.reqSize)));
-  if (d.mocked) sub.appendChild(el('span', 'pill mock', 'mocked'));
+  if (d.resSize) sub.appendChild(el('span', '', t('detail.respSize', { size: fmtBytes(d.resSize) })));
+  if (d.reqSize) sub.appendChild(el('span', '', t('detail.reqSize', { size: fmtBytes(d.reqSize) })));
+  if (d.mocked) sub.appendChild(el('span', 'pill mock', t('detail.mocked')));
   if (d.upgrade) sub.appendChild(el('span', 'pill', d.upgrade));
-  if (d.tunnel) sub.appendChild(el('span', 'pill' + (d.error ? ' err' : ''), 'not decrypted'));
-  if (d.resPatched) sub.appendChild(el('span', 'pill mock', 'patched'));
-  const copyUrl = el('button', 'btn small', 'Copy URL');
+  if (d.tunnel) sub.appendChild(el('span', 'pill' + (d.error ? ' err' : ''), t('detail.notDecrypted')));
+  if (d.resPatched) sub.appendChild(el('span', 'pill mock', t('detail.patched')));
+  const copyUrl = el('button', 'btn small', t('detail.copyUrl'));
   copyUrl.addEventListener('click', () => copyText(d.url || ''));
   sub.appendChild(copyUrl);
   head.appendChild(sub);
   els.detailBody.appendChild(head);
 
   const tabs = el('div', 'tabs');
-  for (const [key, label] of [['summary', 'Summary'], ['req', 'Request'], ['res', 'Response']]) {
+  for (const [key, label] of [['summary', t('detail.tab.summary')], ['req', t('detail.tab.request')], ['res', t('detail.tab.response')]]) {
     if (d.tunnel && key !== 'summary') continue;
     const b = el('button', 'tab' + (state.tab === key ? ' active' : ''), label);
     b.addEventListener('click', () => { state.tab = key; renderDetail(); });
@@ -662,7 +677,7 @@ function card(title, bodyBuilder, extraHead, opts = {}) {
   const toggle = el('button', 'card-toggle');
   toggle.type = 'button';
   toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-  toggle.setAttribute('aria-label', (collapsed ? 'Expand ' : 'Collapse ') + key);
+  toggle.setAttribute('aria-label', t(collapsed ? 'card.expand' : 'card.collapse', { title }));
   toggle.appendChild(el('span', 'chev'));
   toggle.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -697,53 +712,55 @@ function kv(list) {
   return grid;
 }
 
-const TUNNEL_TEXT = {
-  bypass: 'This host matches proxy.bypass, so pbmockx opened a raw TCP tunnel and never saw plaintext. Remove the bypass entry (or narrow it) to capture and mock it.',
-  'mitm-disabled': 'proxy.mitm is false globally, so every HTTPS connection is tunnelled without decryption. Set "mitm": true in config.json.',
-  port: 'This CONNECT port is not in proxy.mitmPorts (default 443, 8443), so the tunnel was not intercepted. Add the port to capture it.',
-  'tls-handshake': 'The CONNECT was intercepted but the TLS handshake failed. Usual causes: the CA is not installed/trusted on the client, the app pins its certificate, it requires mTLS, or it does not speak TLS/HTTP at all.',
-  'ca-error': 'pbmockx could not issue a leaf certificate for this host — check the data directory permissions and the CA files.',
+// Tunnel reasons are machine values; only the explanation is translated.
+const TUNNEL_KEY = {
+  bypass: 'tunnel.bypass',
+  'mitm-disabled': 'tunnel.mitmDisabled',
+  port: 'tunnel.port',
+  'tls-handshake': 'tunnel.tlsHandshake',
+  'ca-error': 'tunnel.caError',
 };
 
 function renderSummary(container, d) {
   if (d.tunnel) {
-    container.appendChild(card('Not decrypted', (b) => {
-      b.appendChild(el('div', 'banner warn', TUNNEL_TEXT[d.tunnel] || d.tunnel));
+    container.appendChild(card(t('detail.card.notDecrypted'), (b) => {
+      const note = TUNNEL_KEY[d.tunnel];
+      b.appendChild(el('div', 'banner warn', note ? t(note) : d.tunnel));
       b.appendChild(kv([
-        ['reason', d.tunnel],
-        ['connect', d.url],
-        ['error', d.error],
-        ['bytes up', d.tunnelBytesUp !== undefined ? fmtBytes(d.tunnelBytesUp) : ''],
-        ['bytes down', d.tunnelBytesDown !== undefined ? fmtBytes(d.tunnelBytesDown) : ''],
-        ['closed', d.tunnelClose],
-        ['duration', d.durationMs !== undefined ? fmtDuration(d.durationMs) : ''],
-        ['client', d.clientIp],
+        [t('kv.reason'), d.tunnel],
+        [t('kv.connect'), d.url],
+        [t('kv.error'), d.error],
+        [t('kv.bytesUp'), d.tunnelBytesUp !== undefined ? fmtBytes(d.tunnelBytesUp) : ''],
+        [t('kv.bytesDown'), d.tunnelBytesDown !== undefined ? fmtBytes(d.tunnelBytesDown) : ''],
+        [t('kv.closed'), d.tunnelClose],
+        [t('kv.duration'), d.durationMs !== undefined ? fmtDuration(d.durationMs) : ''],
+        [t('kv.client'), d.clientIp],
       ]));
-    }));
+    }, null, { key: 'Not decrypted' }));
   }
 
-  const overview = card('Overview', (b) => {
+  const overview = card(t('detail.card.overview'), (b) => {
     const list = [
-      ['method', d.method],
-      ['status', d.status ? d.status + (d.statusText ? ' ' + d.statusText : '') : ''],
-      ['url', d.url],
-      ['original URL', d.originalUrl && d.originalUrl !== d.url ? d.originalUrl : ''],
-      ['request', d.reqProtocol ? (d.reqProtocol === 'protobuf' ? 'protobuf ' + (d.reqMessageType || '') : d.reqProtocol) : ''],
-      ['response', d.resProtocol ? (d.resProtocol === 'protobuf' ? 'protobuf ' + (d.resMessageType || '') : d.resProtocol) : ''],
-      ['duration', d.durationMs !== undefined ? fmtDuration(d.durationMs) : ''],
-      ['request bytes', d.reqSize ? fmtBytes(d.reqSize) + (d.reqTruncated ? ' (truncated)' : '') : ''],
-      ['response bytes', d.resSize ? fmtBytes(d.resSize) + (d.resTruncated ? ' (truncated)' : '') : ''],
-      ['content-encoding', d.resContentEncoding],
-      ['started', d.timings?.start ? new Date(d.timings.start).toLocaleString() : ''],
-      ['flow id', d.id],
+      [t('kv.method'), d.method],
+      [t('kv.status'), d.status ? d.status + (d.statusText ? ' ' + d.statusText : '') : ''],
+      [t('kv.url'), d.url],
+      [t('kv.originalUrl'), d.originalUrl && d.originalUrl !== d.url ? d.originalUrl : ''],
+      [t('kv.request'), d.reqProtocol ? (d.reqProtocol === 'protobuf' ? 'protobuf ' + (d.reqMessageType || '') : d.reqProtocol) : ''],
+      [t('kv.response'), d.resProtocol ? (d.resProtocol === 'protobuf' ? 'protobuf ' + (d.resMessageType || '') : d.resProtocol) : ''],
+      [t('kv.duration'), d.durationMs !== undefined ? fmtDuration(d.durationMs) : ''],
+      [t('kv.reqBytes'), d.reqSize ? fmtBytes(d.reqSize) + (d.reqTruncated ? ' ' + t('detail.truncated') : '') : ''],
+      [t('kv.resBytes'), d.resSize ? fmtBytes(d.resSize) + (d.resTruncated ? ' ' + t('detail.truncated') : '') : ''],
+      [t('kv.contentEncoding'), d.resContentEncoding],
+      [t('kv.started'), d.timings?.start ? new Date(d.timings.start).toLocaleString() : ''],
+      [t('kv.flowId'), d.id],
     ];
     b.appendChild(kv(list));
-  });
+  }, null, { key: 'Overview' });
   container.appendChild(overview);
 
   const rules = d.matchedRules || [];
   if (rules.length) {
-    const rc = card('Matched rules', (b) => {
+    const rc = card(t('detail.matchedRules'), (b) => {
       for (const r of rules) {
         const row = el('div', 'rule-row');
         const main = el('div');
@@ -756,32 +773,32 @@ function renderSummary(container, d) {
         row.appendChild(actions);
         b.appendChild(row);
       }
-    });
+    }, null, { key: 'Matched rules' });
     container.appendChild(rc);
   }
 
   const timings = d.timings || {};
   if (timings.start) {
-    const tc = card('Timing', (b) => {
+    const tc = card(t('detail.card.timing'), (b) => {
       const base = timings.start;
       const list = [
-        ['start', '0 ms'],
-        ['upstream connected', timings.upstreamStart ? (timings.upstreamStart - base) + ' ms' : ''],
-        ['first byte', timings.firstByte ? (timings.firstByte - base) + ' ms' : ''],
-        ['complete', timings.end ? (timings.end - base) + ' ms' : ''],
+        [t('kv.start'), '0 ms'],
+        [t('kv.upstreamConnected'), timings.upstreamStart ? (timings.upstreamStart - base) + ' ms' : ''],
+        [t('kv.firstByte'), timings.firstByte ? (timings.firstByte - base) + ' ms' : ''],
+        [t('kv.complete'), timings.end ? (timings.end - base) + ' ms' : ''],
       ];
       b.appendChild(kv(list));
-    });
+    }, null, { key: 'Timing' });
     container.appendChild(tc);
   }
 
   const problems = [];
-  if (d.error) problems.push(['error', d.error]);
-  if (d.patchError) problems.push(['patch_error', d.patchError]);
-  if (d.decodeError) problems.push(['decode_error', d.decodeError]);
-  if (d.reqDecodeError) problems.push(['request decode', d.reqDecodeError]);
-  if (d.resDecodeError) problems.push(['response decode', d.resDecodeError]);
-  if (d.resTruncated) problems.push(['note', 'Response body was truncated at the recording cap; decoding may be incomplete.']);
+  if (d.error) problems.push([t('problem.error'), d.error]);
+  if (d.patchError) problems.push([t('problem.patchError'), d.patchError]);
+  if (d.decodeError) problems.push([t('problem.decodeError'), d.decodeError]);
+  if (d.reqDecodeError) problems.push([t('problem.reqDecode'), d.reqDecodeError]);
+  if (d.resDecodeError) problems.push([t('problem.resDecode'), d.resDecodeError]);
+  if (d.resTruncated) problems.push([t('problem.note'), t('problem.truncatedNote')]);
   for (const [k, v] of problems) {
     const banner = el('div', 'banner err');
     banner.textContent = k + ': ' + v;
@@ -789,11 +806,11 @@ function renderSummary(container, d) {
   }
 }
 
-function headersCard(title, headers) {
+function headersCard(title, headers, opts = {}) {
   const count = headers ? Object.keys(headers).length : 0;
   const c = card(title + (count ? ' (' + count + ')' : ''), (b) => {
     if (!count) {
-      b.appendChild(el('div', 'body-empty', '(no headers)'));
+      b.appendChild(el('div', 'body-empty', opts.empty || t('detail.noReqHeaders')));
       return;
     }
     const table = el('table', 'headers');
@@ -804,7 +821,7 @@ function headersCard(title, headers) {
       table.appendChild(tr);
     }
     b.appendChild(table);
-  });
+  }, null, opts.key ? { key: opts.key } : {});
   c.classList.add('headers-card');
   return c;
 }
@@ -812,7 +829,7 @@ function headersCard(title, headers) {
 function bodyToolbar(part, d) {
   const toolbar = el('div', 'body-toolbar');
   const seg = el('div', 'seg');
-  for (const [mode, label] of [['decoded', 'Decoded'], ['raw', 'Raw'], ['hex', 'Hex']]) {
+  for (const [mode, label] of [['decoded', t('detail.mode.decoded')], ['raw', t('detail.mode.raw')], ['hex', t('detail.mode.hex')]]) {
     const b = el('button', state.bodyMode === mode ? 'active' : '', label);
     b.addEventListener('click', () => { state.bodyMode = mode; renderDetail(); });
     seg.appendChild(b);
@@ -820,7 +837,7 @@ function bodyToolbar(part, d) {
   toolbar.appendChild(seg);
   if (part === 'res' && d.resPatched) {
     const seg2 = el('div', 'seg');
-    for (const [orig, label] of [[false, 'Patched'], [true, 'Original']]) {
+    for (const [orig, label] of [[false, t('detail.mode.patched')], [true, t('detail.mode.original')]]) {
       const b = el('button', state.original === orig ? 'active' : '', label);
       b.addEventListener('click', async () => {
         if (orig && !state.detailOriginal) await loadOriginalDetail();
@@ -832,14 +849,14 @@ function bodyToolbar(part, d) {
     toolbar.appendChild(seg2);
   }
   toolbar.appendChild(el('span', 'spacer'));
-  const copyBtn = el('button', 'btn small', 'Copy');
+  const copyBtn = el('button', 'btn small', t('common.copy'));
   copyBtn.addEventListener('click', async () => {
     const src = sourceDetail(part);
     const data = part === 'req' ? src.reqData : src.resData;
     copyText(data !== undefined ? JSON.stringify(data, null, 2) : '');
   });
   toolbar.appendChild(copyBtn);
-  const dl = el('a', 'btn small', 'Download');
+  const dl = el('a', 'btn small', t('common.download'));
   const q = new URLSearchParams({ part: part === 'req' ? 'req' : (state.original ? 'res-original' : 'res') });
   dl.href = '/__pbmockx/api/flows/' + encodeURIComponent(d.id) + '/body?' + q.toString();
   dl.download = d.id + '-' + (part === 'req' ? 'request' : 'response') + '.bin';
@@ -852,7 +869,7 @@ async function fetchBodyText(d, part, mode) {
   if (state.bodyCache.has(key)) return state.bodyCache.get(key);
   const q = new URLSearchParams({ part: part === 'req' ? 'req' : (state.original ? 'res-original' : 'res') });
   const res = await fetch('/__pbmockx/api/flows/' + encodeURIComponent(d.id) + '/body?' + q.toString());
-  if (!res.ok) throw new Error('Body not available (HTTP ' + res.status + ')');
+  if (!res.ok) throw new Error(t('body.notAvailable', { status: res.status }));
   const bytes = new Uint8Array(await res.arrayBuffer());
   let out;
   if (mode === 'hex') {
@@ -864,11 +881,11 @@ async function fetchBodyText(d, part, mode) {
       const ascii = Array.from(chunk).map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
       lines.push(i.toString(16).padStart(8, '0') + '  ' + hex + '  ' + ascii);
     }
-    if (bytes.length > limit) lines.push('… ' + (bytes.length - limit) + ' more bytes');
+    if (bytes.length > limit) lines.push(t('body.moreBytes', { n: bytes.length - limit }));
     out = lines.join('\n');
   } else {
     out = new TextDecoder('utf-8').decode(bytes);
-    if (out.length > 400000) out = out.slice(0, 400000) + '\n… (truncated for display)';
+    if (out.length > 400000) out = out.slice(0, 400000) + '\n' + t('body.truncatedForDisplay');
   }
   state.bodyCache.set(key, out);
   return out;
@@ -877,7 +894,7 @@ async function fetchBodyText(d, part, mode) {
 function renderDecodedBody(container, part) {
   const src = sourceDetail(part);
   if (!src) {
-    container.appendChild(el('div', 'body-empty', 'No data yet'));
+    container.appendChild(el('div', 'body-empty', t('body.noData')));
     return;
   }
   const protocol = part === 'req' ? src.reqProtocol : src.resProtocol;
@@ -889,7 +906,7 @@ function renderDecodedBody(container, part) {
   }
   if (data === undefined || data === null) {
     const hasBody = part === 'req' ? src.reqSize : src.resSize;
-    container.appendChild(el('div', 'body-empty', hasBody ? 'Body is not decodable (use Raw/Hex)' : '(empty body)'));
+    container.appendChild(el('div', 'body-empty', hasBody ? t('body.notDecodable') : t('body.empty')));
     return;
   }
   if (protocol === 'protobuf') {
@@ -916,16 +933,16 @@ function queryCard(url) {
     entries = [...new URL(url, location.origin).searchParams.entries()];
   } catch {}
   if (!entries.length) return null;
-  const c = card('Query (' + entries.length + ')', (b) => {
+  const c = card(t('detail.queryCount', { n: entries.length }), (b) => {
     const table = el('table', 'headers');
     for (const [k, v] of entries) {
       const tr = el('tr');
       tr.appendChild(el('td', 'k', k));
-      tr.appendChild(el('td', 'v', v === '' ? '(empty)' : v));
+      tr.appendChild(el('td', 'v', v === '' ? t('common.emptyParen') : v));
       table.appendChild(tr);
     }
     b.appendChild(table);
-  });
+  }, null, { key: 'Query' });
   c.classList.add('query-card');
   return c;
 }
@@ -936,20 +953,23 @@ function renderMessage(container, part) {
   const headers = isReq ? d.reqHeaders : d.resHeaders;
   const qc = isReq ? queryCard(d.url) : null;
   if (qc) container.appendChild(qc);
-  container.appendChild(headersCard(isReq ? 'Request headers' : 'Response headers', headers));
+  container.appendChild(headersCard(isReq ? t('detail.reqHeaders') : t('detail.resHeaders'), headers, {
+    empty: isReq ? t('detail.noReqHeaders') : t('detail.noResHeaders'),
+    key: isReq ? 'Request headers' : 'Response headers',
+  }));
 
   // Build lazily: collapsing a huge body must not keep decoding it on every
   // SSE re-render, and the raw fetch is deferred until the card is opened.
-  const bodyCard = card(isReq ? 'Request body' : 'Response body', (bodyBox) => {
+  const bodyCard = card(isReq ? t('detail.reqBody') : t('detail.resBody'), (bodyBox) => {
     if (state.bodyMode === 'decoded') {
       renderDecodedBody(bodyBox, part);
       return;
     }
-    bodyBox.appendChild(el('div', 'body-empty', 'Loading…'));
+    bodyBox.appendChild(el('div', 'body-empty', t('common.loading')));
     fetchBodyText(d, part, state.bodyMode)
       .then((text) => {
         bodyBox.innerHTML = '';
-        const pre = el('pre', 'raw' + (state.bodyMode === 'hex' ? ' hex' : ''), text || '(empty)');
+        const pre = el('pre', 'raw' + (state.bodyMode === 'hex' ? ' hex' : ''), text || t('common.emptyParen'));
         bodyBox.appendChild(pre);
       })
       .catch((e) => {
@@ -958,8 +978,36 @@ function renderMessage(container, part) {
       });
   }, (head) => {
     head.appendChild(bodyToolbar(part, d));
-  });
+  }, { key: isReq ? 'Request body' : 'Response body' });
   container.appendChild(bodyCard);
+}
+
+// --- language ---
+
+function hasExplicitLangChoice() {
+  try {
+    return !!new URLSearchParams(location.search).get('lang') || !!localStorage.getItem('pbmockx-lang');
+  } catch { return false; }
+}
+
+/**
+ * /health.lang is a default, not an override: ?lang= and a choice made with the
+ * toggle always win. Never awaited before rendering — a late answer just
+ * re-renders the panes that already baked t() output into the DOM.
+ */
+function syncLangFromServer(serverLang) {
+  const next = normalizeLang(serverLang);
+  if (!next || next === getLang() || hasExplicitLangChoice()) return;
+  setLang(next, { persist: false });
+  refreshForLang();
+}
+
+function refreshForLang() {
+  renderPauseLabel();
+  if (state.conn) setConn(state.conn.ok, state.conn.key);
+  renderFlows();
+  if (state.detail) renderDetail();
+  if (state.drawer) renderDrawer().catch(() => {});
 }
 
 // --- health / load ---
@@ -967,12 +1015,13 @@ function renderMessage(container, part) {
 async function fetchHealth() {
   try {
     state.health = await api('/health');
-    setConn(true, 'live');
+    setConn(true);
     els.version.textContent = 'v' + state.health.version;
     state.rulesCount = state.health.rules || 0;
     els.rulesCount.textContent = String(state.rulesCount);
+    syncLangFromServer(state.health.lang);
   } catch {
-    setConn(false, 'offline');
+    setConn(false);
   }
 }
 
@@ -980,7 +1029,7 @@ async function initialLoad() {
   try {
     state.info = await api('/info');
     const host = state.info.host === '0.0.0.0' || state.info.host === '::'
-      ? (state.info.lanAddresses && state.info.lanAddresses[0]) || '<this-machine-ip>'
+      ? (state.info.lanAddresses && state.info.lanAddresses[0]) || t('setup.thisMachineIp')
       : state.info.host;
     els.proxyAddr.textContent = host + ':' + state.info.port;
   } catch {}
@@ -989,7 +1038,7 @@ async function initialLoad() {
     state.flows = flows || [];
     renderFlows();
   } catch (e) {
-    setConn(false, 'offline');
+    setConn(false);
   }
   await fetchHealth();
   const hash = location.hash;
@@ -1016,10 +1065,10 @@ function updateHash() {
 function connectEvents() {
   const es = new EventSource('/__pbmockx/api/events');
   es.onopen = () => {
-    setConn(true, 'live');
+    setConn(true);
     fetchHealth();
   };
-  es.onerror = () => setConn(false, 'reconnecting…');
+  es.onerror = () => setConn(false, 'conn.reconnecting');
   es.addEventListener('flow.new', (e) => {
     try { upsertFlow(JSON.parse(e.data), true); } catch {}
   });
@@ -1052,7 +1101,7 @@ function wire() {
   $('#btn-pause').addEventListener('click', () => {
     state.paused = !state.paused;
     $('#btn-pause').classList.toggle('active', state.paused);
-    $('#btn-pause').textContent = state.paused ? 'Paused' : 'Pause';
+    renderPauseLabel();
     if (!state.paused) {
       renderFlows();
       fetchHealth();
@@ -1060,7 +1109,7 @@ function wire() {
     }
   });
   $('#btn-clear').addEventListener('click', async () => {
-    if (!confirm('Clear all captured flows?')) return;
+    if (!confirm(t('confirm.clearFlows'))) return;
     try {
       await api('/flows', { method: 'DELETE' });
       state.flows = [];
@@ -1070,7 +1119,7 @@ function wire() {
       els.emptyDetail.classList.remove('hidden');
       renderFlows();
       updateHash();
-      toast('Flows cleared');
+      toast(t('toast.flowsCleared'));
     } catch (e) { toast(e.message, true); }
   });
   $('#btn-rules').addEventListener('click', () => openDrawer('rules'));
@@ -1157,7 +1206,34 @@ function wire() {
 }
 
 applyTheme(localStorage.getItem('pbmockx-theme') || 'auto');
-wire();
-initialLoad();
-connectEvents();
-setInterval(fetchHealth, 10000);
+
+function startUi() {
+  // Static markup first, then the toggle. The reload below is deliberate:
+  // dynamically rendered panes would otherwise keep the old language. List
+  // width, tree expansion and collapsed cards are already in localStorage.
+  applyStatic();
+  renderPauseLabel();
+  const langButton = $('#btn-lang');
+  mountLangToggle(langButton);
+  if (langButton) {
+    langButton.addEventListener('click', () => {
+      // mountLangToggle already flipped and persisted; drop ?lang= so the
+      // shareable query param cannot override the new choice after reloading.
+      try {
+        const url = new URL(location.href);
+        if (url.searchParams.has('lang')) {
+          url.searchParams.delete('lang');
+          history.replaceState(null, '', url.pathname + url.search + url.hash);
+        }
+      } catch { /* no location/history */ }
+      location.reload();
+    });
+  }
+  wire();
+  initialLoad();
+  connectEvents();
+  setInterval(fetchHealth, 10000);
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startUi, { once: true });
+else startUi();

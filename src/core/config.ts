@@ -15,6 +15,8 @@ import * as path from 'path';
 export interface PbmockxConfig {
   port: number;
   host: string;
+  /** UI/CLI language: "zh" | "en". Unset = follow the system locale (fallback en). */
+  lang?: string;
   proxy: {
     mitm: boolean;
     mitmPorts: number[];

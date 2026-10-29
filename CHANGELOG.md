@@ -5,6 +5,15 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+- **中英双语（CLI + Web UI）**：默认跟随系统语言（`zh*` → 中文，其余 → 英文），优先级 `--lang` > `PBMOCKX_LANG` > `config.json {"lang"}` > 系统 locale > `en`。
+  - CLI 新增全局 `--lang zh|en`，可放在子命令前后；`-h/--help`、`doctor`、`fix`、`rules`、`map-local`、`map-remote`、`connect-android`、`ca`、`skill` 等人类可读输出都有中文。
+  - Web UI 顶栏新增「中文 / EN」切换（记在 localStorage），支持 `?lang=zh|en`；列表、详情、字段树、Mock 规则面板、Setup & CA 全部双语。守护进程通过 `/health` 的 `lang` 字段把默认语言告诉 UI，`pbmockx start --lang zh` 一步到位。
+  - 文案目录：`src/i18n/`（CLI，中文缺 key 直接编译失败）与 `web/i18n.js`（UI，零构建）。
+  - 机器契约保持英文：`--json`、表格表头、`=== Request ===` 分隔符、`OK/WARN/FAIL`、日志文件。
+
 ## [1.1.0] - 2026-10-22
 
 ### 新增

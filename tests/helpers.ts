@@ -15,6 +15,10 @@ import { startDaemon, type DaemonHandle } from '../src/server/daemon';
 
 const forge: any = require('node-forge');
 
+// CLI/daemon output must be deterministic in tests: pin English unless the
+// caller already chose a language. (Messages are localized; see src/core/lang.ts.)
+if (!process.env.PBMOCKX_LANG) process.env.PBMOCKX_LANG = 'en';
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }

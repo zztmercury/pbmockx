@@ -19,6 +19,7 @@ import {
   type PbmockxPaths,
 } from '../core/config';
 import { tailFile } from '../core/logger';
+import { t } from '../i18n';
 import { CertAuthority } from '../proxy/ca';
 import { health } from './api';
 
@@ -71,10 +72,14 @@ export async function cmdStart(opts: StartOptions = {}): Promise<void> {
   if (existingRuntime) {
     const existing = await waitForHealth(existingRuntime.port, 600, probeHostFor(existingRuntime.host));
     if (existing) {
-      console.log(`pbmockx is already running at http://${probeHostFor(existingRuntime.host)}:${existingRuntime.port} (pid ${existingRuntime.pid || '?'})`);
+      console.log(t('start.alreadyRunning', {
+        host: probeHostFor(existingRuntime.host),
+        port: existingRuntime.port,
+        pid: existingRuntime.pid || '?',
+      }));
       const ips = localAddresses();
       if (wildcardHost(existingRuntime.host) && ips.length) {
-        console.log(`  LAN: http://${ips[0]}:${existingRuntime.port}/`);
+        console.log(t('start.lanLine', { ip: ips[0], port: existingRuntime.port }));
       }
       return;
     }
@@ -95,7 +100,7 @@ export async function cmdStart(opts: StartOptions = {}): Promise<void> {
     process.on('SIGINT', () => void shutdown());
     process.on('SIGTERM', () => void shutdown());
     const shown = probeHostFor(host);
-    console.log(`pbmockx daemon running at http://${shown}:${handle.port} (Ctrl+C to stop)`);
+    console.log(t('start.foreground', { host: shown, port: handle.port }));
     return;
   }
 
@@ -118,39 +123,39 @@ export async function cmdStart(opts: StartOptions = {}): Promise<void> {
 
   const ready = await waitForHealth(port, 20000, probeHostFor(host));
   if (!ready) {
-    console.error('pbmockx failed to start. Last log lines:');
+    console.error(t('start.failed'));
     console.error(tailFile(p.logFile, 30));
     process.exitCode = 1;
     return;
   }
   const shownHost = probeHostFor(host);
-  console.log(`pbmockx started (pid ${readRuntime(p)?.pid || child.pid})`);
-  console.log(`  proxy : ${host}:${port}`);
-  console.log(`  UI    : http://${shownHost}:${port}/`);
+  console.log(t('start.started', { pid: readRuntime(p)?.pid || child.pid }));
+  console.log(t('start.proxyLine', { host, port }));
+  console.log(t('start.uiLine', { host: shownHost, port }));
   const ips = localAddresses();
   if ((host === '0.0.0.0' || host === '::') && ips.length) {
-    for (const ip of ips.slice(0, 3)) console.log(`  LAN   : http://${ip}:${port}/  (proxy ${ip}:${port})`);
+    for (const ip of ips.slice(0, 3)) console.log(t('start.lanAddress', { ip, port }));
     console.log('');
-    console.log('LAN note: devices on this network can open the UI and read captured traffic.');
-    console.log('          Set ui.lanAccess=false in config.json to expose only the proxy.');
+    console.log(t('start.lanNote1'));
+    console.log(t('start.lanNote2'));
   } else if (host === '0.0.0.0' || host === '::') {
-    console.log('  LAN   : no non-internal IPv4 address detected');
+    console.log(t('start.noLanIp'));
   }
-  console.log(`  data  : ${p.dataDir}`);
-  console.log(`  CA    : ${p.caCertFile}`);
+  console.log(t('start.dataLine', { dir: p.dataDir }));
+  console.log(t('start.caLine', { file: p.caCertFile }));
   console.log('');
-  console.log('Next: install the CA on your device (pbmockx ca), then configure the proxy above.');
+  console.log(t('start.next'));
 }
 
 export async function cmdStop(opts: { dataDir?: string } = {}): Promise<void> {
   const p = statePaths(opts.dataDir);
   const rt = readRuntime(p);
   if (!rt) {
-    console.log('pbmockx is not running');
+    console.log(t('stop.notRunning'));
     return;
   }
   try { process.kill(rt.pid, 'SIGTERM'); } catch (e: any) {
-    if (e.code !== 'ESRCH') console.error('stop failed:', e.message);
+    if (e.code !== 'ESRCH') console.error(t('stop.failed', { message: e.message }));
   }
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
@@ -161,7 +166,7 @@ export async function cmdStop(opts: { dataDir?: string } = {}): Promise<void> {
   }
   try { process.kill(rt.pid, 0); process.kill(rt.pid, 'SIGKILL'); } catch {}
   try { fs.unlinkSync(p.runtimeFile); } catch {}
-  console.log('pbmockx stopped');
+  console.log(t('stop.stopped'));
 }
 
 export async function cmdRestart(opts: StartOptions = {}): Promise<void> {
@@ -191,17 +196,17 @@ export async function cmdStatus(opts: { dataDir?: string; json?: boolean } = {})
     console.log(JSON.stringify({ running: !!info, port, runtime: rt, health: info, lanAddresses: ips }, null, 2));
     return;
   }
-  console.log('pbmockx', readVersion(p));
+  console.log(t('cli.version', { version: readVersion(p) }));
   if (info) {
     const uptime = Math.round((info.uptime || 0) / 1000);
     const shownHost = rt && !wildcardHost(rt.host) ? rt.host : '127.0.0.1';
-    console.log(`Daemon: running (pid ${rt?.pid || '?'}) http://${shownHost}:${port}`);
-    console.log(`Uptime: ${formatUptime(uptime)} | flows: ${info.flow_count} | rules: ${info.rules}`);
-    console.log(`UI:     http://${shownHost}:${port}/`);
-    if (lanHost) console.log(`LAN:    http://${lanHost}:${port}/  (proxy ${lanHost}:${port})`);
+    console.log(t('status.daemonRunning', { pid: rt?.pid || '?', host: shownHost, port }));
+    console.log(t('status.uptime', { uptime: formatUptime(uptime), flows: info.flow_count, rules: info.rules }));
+    console.log(t('status.ui', { host: shownHost, port }));
+    if (lanHost) console.log(t('status.lan', { ip: lanHost, port }));
   } else {
-    console.log('Daemon: not running');
-    console.log(`Start:  pbmockx start${p.dataDir !== dataDir() ? ` --data-dir ${p.dataDir}` : ''}`);
+    console.log(t('status.notRunning'));
+    console.log(t('status.start', { dataDir: p.dataDir !== dataDir() ? ` --data-dir ${p.dataDir}` : '' }));
   }
 }
 
@@ -258,20 +263,20 @@ export async function cmdCa(opts: {
 
   if (opts.regen) {
     if (!opts.yes) {
-      console.error('Refusing to regenerate the CA without --yes (all devices will need to re-trust it).');
+      console.error(t('ca.regenNeedsYes'));
       process.exitCode = 1;
       return;
     }
     await ca.regenerate();
-    console.log('CA regenerated at', p.caCertFile);
+    console.log(t('ca.regenerated', { file: p.caCertFile }));
     if (running) {
-      console.log('Restarting daemon to load the new CA...');
+      console.log(t('ca.restarting'));
       await cmdRestart({ dataDir: p.dataDir, port });
     }
   } else if (!fs.existsSync(p.caCertFile)) {
     await ca.ensure();
-    console.log('Generated CA at', p.caCertFile);
-    if (running) console.log('Restart the daemon to load it: pbmockx restart');
+    console.log(t('ca.generated', { file: p.caCertFile }));
+    if (running) console.log(t('ca.restartToLoad'));
   }
 
   await ca.ensure();
@@ -279,27 +284,27 @@ export async function cmdCa(opts: {
   if (opts.out) {
     const out = path.resolve(opts.out);
     fs.writeFileSync(out, ca.getCaPem());
-    console.log('Wrote CA certificate to', out);
+    console.log(t('ca.wrote', { file: out }));
     return;
   }
   if (opts.info) {
     console.log(JSON.stringify(info, null, 2));
     return;
   }
-  console.log('CA certificate:', info.path);
-  console.log('Subject      :', info.subject);
-  console.log('SHA-256      :', info.fingerprint256);
-  console.log('Android hash :', info.subjectHashOld);
-  console.log('Valid        :', info.notBefore, '->', info.notAfter);
+  console.log(t('ca.certificate', { file: info.path }));
+  console.log(t('ca.subject', { subject: info.subject }));
+  console.log(t('ca.sha256', { fingerprint: info.fingerprint256 }));
+  console.log(t('ca.androidHash', { hash: info.subjectHashOld }));
+  console.log(t('ca.valid', { notBefore: info.notBefore, notAfter: info.notAfter }));
   console.log('');
-  console.log('Install it on the client device:');
-  console.log('  download  : http://127.0.0.1:' + port + '/__pbmockx/api/ca.pem');
-  console.log('  copy file : pbmockx ca --out ./pbmockx-ca.crt');
+  console.log(t('ca.installTitle'));
+  console.log(t('ca.download', { port }));
+  console.log(t('ca.copyFile'));
   console.log('');
   console.log('macOS:   sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ./pbmockx-ca.crt');
   console.log('Windows: certutil -addstore -f "ROOT" pbmockx-ca.crt');
   console.log('Linux:   sudo cp pbmockx-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates');
-  console.log('Android: pbmockx connect-android   (proxy + cert status; system cert needs root/Magisk)');
+  console.log(t('ca.android'));
 }
 
 export function openUrl(url: string): void {
@@ -311,6 +316,6 @@ export function openUrl(url: string): void {
   try {
     execSync(cmd, { stdio: 'ignore' });
   } catch {
-    console.log('Open manually:', url);
+    console.log(t('web.openManual', { url }));
   }
 }
