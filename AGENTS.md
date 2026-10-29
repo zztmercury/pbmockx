@@ -188,7 +188,12 @@ git push && git push --tags      # tag 触发 release.yml：npm publish + GitHub
 gh workflow run release.yml -f dry_run=true
 ```
 
-**发布走 GitHub Actions，不再手敲 `npm publish`。** `release.yml` 用 npm trusted publishing（OIDC，`id-token: write`），不需要 `NPM_TOKEN` secret，产物附带 provenance。首次使用需在 npmjs 包设置里配一次 Trusted publishing：GitHub Actions / `zztmercury` / `pbmockx` / workflow 文件名必须是 `release.yml` / environment 留空——文件名对不上会被 npm 拒绝。
+**发布走 GitHub Actions，不再手敲 `npm publish`。** 认证有两条路，`release.yml` 按顺序尝试：
+
+1. **Trusted publishing（首选）**：OIDC + `id-token: write`，无长期密钥。需在 npmjs 包设置里配一次：GitHub Actions / `zztmercury` / `pbmockx` / workflow 文件名必须是 `release.yml` / environment 留空——文件名对不上 npm 会拒绝。命令行等价：`npm trust github pbmockx --file release.yml --repo zztmercury/pbmockx --allow-publish`（需 2FA，非 TTY 里授权 URL 会被打码，得在真终端/浏览器里做）。
+2. **`NPM_TOKEN` 兜底**：仓库 secret `NPM_TOKEN`（granular access token，只给 `pbmockx` 的 read+write，设过期时间）。`Configure npm auth` 步骤检测到它就把 `//registry.npmjs.org/:_authToken=…` 写进 `$RUNNER_TEMP/npmrc` 并通过 `NPM_CONFIG_USERCONFIG` 生效；没有则走 OIDC。
+
+两条路都会跑 `npm publish --provenance`（provenance 依赖 `id-token: write`，与认证方式无关）。都没配时报 `ENEEDAUTH`，Publish 步骤会打印上面两种配置方法。注意 npm 正在收紧“绕过 2FA 的 token”，长期看 OIDC 才是正路。
 
 `release.yml` 两个 job：`publish`（npm）+ `github-release`（只在 tag ref 上跑，`contents: write`）。GitHub Release 的正文由 `scripts/changelog-notes.js` 从 CHANGELOG 的 `## [<version>]` 段落抽取，同时写进 job summary；已存在的 release 不会覆盖（打 `::notice::` 跳过），带 `-` 的 tag（如 `v1.2.0-beta.1`）自动 `--prerelease`。
 

@@ -86,6 +86,22 @@ jobs:
       - name: Typecheck and test
         run: npm test
 
+      - name: Configure npm auth
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eu
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            # Fallback when trusted publishing is not configured: a granular
+            # access token stored as the repository secret NPM_TOKEN.
+            printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_TOKEN" > "$RUNNER_TEMP/npmrc"
+            chmod 600 "$RUNNER_TEMP/npmrc"
+            echo "NPM_CONFIG_USERCONFIG=$RUNNER_TEMP/npmrc" >> "$GITHUB_ENV"
+            echo "::notice::publishing with the NPM_TOKEN secret"
+          else
+            echo "no NPM_TOKEN secret — using npm trusted publishing (OIDC)"
+          fi
+
       - name: Publish
         env:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
@@ -105,7 +121,12 @@ jobs:
             npm publish --dry-run
           else
             echo "publishing pbmockx@$version"
-            npm publish --provenance
+            if ! npm publish --provenance; then
+              echo "::error::npm publish failed. Configure ONE of:"
+              echo "::error::  1) trusted publishing: npm trust github pbmockx --file release.yml --repo $GITHUB_REPOSITORY --allow-publish"
+              echo "::error::  2) repository secret NPM_TOKEN (granular token with publish rights for pbmockx)"
+              exit 1
+            fi
           fi
 
   github-release:
