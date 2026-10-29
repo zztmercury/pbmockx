@@ -47,7 +47,8 @@
     "dev": "tsc -p tsconfig.json -w",
     "start": "node bin/pbmockxd.js",
     "prepack": "npm run build",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm test",
+    "notes": "node scripts/changelog-notes.js"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",

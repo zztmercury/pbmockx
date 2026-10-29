@@ -168,19 +168,21 @@ node --test --test-name-pattern "WebSocket" dist/tests/e2e/http.test.js
 ```bash
 echo "1.0.0" > VERSION
 # 同步 package.json 的 version
-# 更新 CHANGELOG.md
+# 更新 CHANGELOG.md：必须有 "## [1.0.0]" 段落，GitHub Release 的正文直接取自它
+npm run notes                    # 预览这段会变成什么（= scripts/changelog-notes.js）
 git add VERSION package.json CHANGELOG.md && git commit -m "release: v1.0.0"
 git tag -a v1.0.0 -m "v1.0.0"
-git push && git push --tags      # 推送 tag 触发 .github/workflows/release.yml 发 npm
-gh release create v1.0.0 --notes-file CHANGELOG.md --title "v1.0.0"
+git push && git push --tags      # tag 触发 release.yml：npm publish + GitHub Release
 
-# 不发 tag 想验证流水线：默认 dry-run，不真的上传
+# 不发 tag 想验证流水线：默认 dry-run，不真的上传、不建 release
 gh workflow run release.yml -f dry_run=true
 ```
 
 **发布走 GitHub Actions，不再手敲 `npm publish`。** `release.yml` 用 npm trusted publishing（OIDC，`id-token: write`），不需要 `NPM_TOKEN` secret，产物附带 provenance。首次使用需在 npmjs 包设置里配一次 Trusted publishing：GitHub Actions / `zztmercury` / `pbmockx` / workflow 文件名必须是 `release.yml` / environment 留空——文件名对不上会被 npm 拒绝。
 
-workflow 的硬校验：`npm -v >= 11.5.1`（trusted publishing 要求）、`VERSION == package.json version`、tag 名必须等于 `v<VERSION>`；非 tag ref 只允许 dry-run。版本已发布时打 `::warning::` 并跳过，所以重跑 tag 流水线不会红。`npm test` 会跑两遍（显式 step + `prepublishOnly`），多花几秒换取 CI 里可见的测试输出。
+`release.yml` 两个 job：`publish`（npm）+ `github-release`（只在 tag ref 上跑，`contents: write`）。GitHub Release 的正文由 `scripts/changelog-notes.js` 从 CHANGELOG 的 `## [<version>]` 段落抽取，同时写进 job summary；已存在的 release 不会覆盖（打 `::notice::` 跳过），带 `-` 的 tag（如 `v1.2.0-beta.1`）自动 `--prerelease`。
+
+workflow 的硬校验：`npm -v >= 11.5.1`（trusted publishing 要求）、`VERSION == package.json version`、tag 名必须等于 `v<VERSION>`、CHANGELOG 里必须有该版本段落（在 publish 之前校验，所以不会出现「npm 发了但没 notes」的半成品）；非 tag ref 只允许 dry-run。版本已发布时打 `::warning::` 并跳过上传，所以重跑 tag 流水线不会红。`npm test` 会跑两遍（显式 step + `prepublishOnly`），多花几秒换取 CI 里可见的测试输出。
 
 `VERSION` 是权威版本来源；`pbmockx version` 读取它，`doctor`/UI 显示它。`version --check` 非阻塞请求 GitHub releases。
 

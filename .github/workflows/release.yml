@@ -1,7 +1,8 @@
 name: release
 
-# Publishes to npm when a `v*` tag is pushed, using npm trusted publishing
-# (OIDC) — no NPM_TOKEN secret. Provenance is attached to the tarball.
+# Pushing a `v*` tag does two things:
+#   1. publish to npm (trusted publishing over OIDC — no NPM_TOKEN secret)
+#   2. create the matching GitHub Release, notes taken from CHANGELOG.md
 #
 # One-time setup on npmjs.com (package → Settings → Trusted publishing):
 #   publisher: GitHub Actions
@@ -10,7 +11,8 @@ name: release
 #   workflow filename: release.yml
 #   environment:       (leave empty)
 #
-# Manual runs (`workflow_dispatch`) default to dry-run: all checks + pack, no upload.
+# Manual runs (`workflow_dispatch`) default to dry-run: checks + pack, no upload,
+# no release.
 
 on:
   push:
@@ -75,6 +77,8 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match v$version"
             exit 1
           fi
+          # Fails before anything is published, so a tag can never ship without notes.
+          node scripts/changelog-notes.js --check
 
       - name: Install
         run: npm ci
@@ -103,3 +107,47 @@ jobs:
             echo "publishing pbmockx@$version"
             npm publish --provenance
           fi
+
+  github-release:
+    name: GitHub Release
+    needs: publish
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Extract release notes from CHANGELOG
+        run: node scripts/changelog-notes.js --out "$RUNNER_TEMP/notes.md"
+
+      - name: Add notes to job summary
+        run: |
+          set -eu
+          {
+            echo "### v$(tr -d '[:space:]' < VERSION)"
+            echo
+            cat "$RUNNER_TEMP/notes.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="v$(tr -d '[:space:]' < VERSION)"
+          if url="$(gh release view "$tag" --json url --jq .url 2>/dev/null)"; then
+            echo "::notice::release $tag already exists — leaving it untouched ($url)"
+            exit 0
+          fi
+          case "$tag" in
+            *-*) flags="--prerelease" ;; # e.g. v1.2.0-beta.1
+            *)   flags="" ;;
+          esac
+          # gh prints the new release URL on success; its exit status is the check.
+          gh release create "$tag" \
+            --verify-tag \
+            --title "$tag" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            $flags
